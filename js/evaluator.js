@@ -224,21 +224,76 @@ class ModelEvaluator {
     return max;
   }
 
+  /**
+   * UV利用度 (UV Utilization)
+   *
+   * Uses actual UV data from the model:
+   * - Divide UV space [0,1]x[0,1] into a 32x32 grid
+   * - Count occupied cells (cells with at least one UV point)
+   * - Utilization ratio = occupied / total
+   * - Also checks for UVs outside [0,1] range (indicates poor layout)
+   * - Score based on utilization ratio: >80% = full, <60% = 0
+   */
   static _evalUVUtilization(geo) {
     const max = RAW_MAX.uvUtilization;
     if (!geo.hasUV) return max * 0.3;
-    const vc = geo.totalVertices || 0;
-    let simulatedRatio;
-    if (vc > 10000) simulatedRatio = 0.75 + Math.random() * 0.2;
-    else if (vc > 2000) simulatedRatio = 0.65 + Math.random() * 0.25;
-    else simulatedRatio = 0.50 + Math.random() * 0.30;
 
-    if (simulatedRatio > 0.8) return max;
-    if (simulatedRatio > 0.6) {
-      const penalty = (0.8 - simulatedRatio) * 100;
-      return Math.max(max - penalty, 0);
+    const uvs = geo.uvs;
+    if (!uvs || uvs.length === 0) return max * 0.3;
+
+    // 32x32 grid in UV space
+    const gridSize = 32;
+    const grid = new Set();
+    let outOfRangeCount = 0;
+    let validCount = 0;
+
+    for (let i = 0; i < uvs.length; i++) {
+      const uv = uvs[i];
+      if (!uv) continue;
+      validCount++;
+
+      const u = uv.u;
+      const v = uv.v;
+
+      // Check if UV is outside [0,1] range
+      if (u < -0.001 || u > 1.001 || v < -0.001 || v > 1.001) {
+        outOfRangeCount++;
+      }
+
+      // Clamp to grid
+      const gu = Math.max(0, Math.min(gridSize - 1, Math.floor(u * gridSize)));
+      const gv = Math.max(0, Math.min(gridSize - 1, Math.floor(v * gridSize)));
+      grid.add(gu * gridSize + gv);
     }
-    return 0;
+
+    if (validCount === 0) return max * 0.3;
+
+    const totalCells = gridSize * gridSize;
+    const occupiedCells = grid.size;
+    const utilizationRatio = occupiedCells / totalCells;
+
+    // Out-of-range UVs indicate poor layout
+    const outOfRangeRatio = outOfRangeCount / validCount;
+
+    // Score: utilization > 80% = full marks
+    // utilization 60-80% = proportional
+    // utilization < 60% = 0
+    let score;
+    if (utilizationRatio > 0.8) {
+      score = max;
+    } else if (utilizationRatio > 0.6) {
+      score = max * ((utilizationRatio - 0.6) / 0.2);
+    } else {
+      score = 0;
+    }
+
+    // Penalty for out-of-range UVs (max 30% of score)
+    if (outOfRangeRatio > 0) {
+      const penalty = Math.min(outOfRangeRatio * 0.5, 0.3) * max;
+      score = Math.max(score - penalty, 0);
+    }
+
+    return Math.max(score, 0);
   }
 
   // === Texture evaluators (REWRITTEN per user spec) ===
@@ -567,7 +622,8 @@ class ModelEvaluator {
 
   /**
    * Sample texture color at UV coordinates.
-   * texture.flipY = false in viewer, so UV (0,0) → top-left of image data.
+   * texture.flipY = true (Three.js default), so UV (0,0) → bottom-left of image.
+   * Canvas getImageData starts from top-left, so we need to flip V.
    */
   static _sampleTexture(imgData, u, v) {
     if (!imgData) return null;
@@ -576,7 +632,8 @@ class ModelEvaluator {
     u = Math.max(0, Math.min(0.9999, u));
     v = Math.max(0, Math.min(0.9999, v));
     const px = Math.min(Math.floor(u * width), width - 1);
-    const py = Math.min(Math.floor(v * height), height - 1);
+    // Flip V: UV v=0 is bottom of texture, but image data row 0 is top
+    const py = height - 1 - Math.min(Math.floor(v * height), height - 1);
     const idx = (py * width + px) * 4;
     return { r: data[idx], g: data[idx + 1], b: data[idx + 2] };
   }
