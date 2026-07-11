@@ -618,7 +618,23 @@ class ModelViewer {
    *   distances  — array of actual distances for pairs below 5% of avg
    */
   _computeClosePairData(positions) {
-    const n = positions.length;
+    // --- Step 0: deduplicate positions ---
+    // Buffer geometry often splits one logical vertex into multiple entries
+    // (different normals / UVs). These duplicates sit at the exact same
+    // coordinates and would produce distance-0 pairs that instantly max out
+    // the deduction. We only care about *unique* spatial points.
+    const DEDUP_EPS = 1e-6; // 0.000001 units ≈ 0.0001cm
+    const seen = new Set();
+    const unique = [];
+    for (const p of positions) {
+      const key = `${Math.round(p.x / DEDUP_EPS)},${Math.round(p.y / DEDUP_EPS)},${Math.round(p.z / DEDUP_EPS)}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        unique.push(p);
+      }
+    }
+
+    const n = unique.length;
     if (n < 2) return { avg: 0, distances: [] };
 
     // --- Step 1: average pairwise distance ---
@@ -630,7 +646,7 @@ class ModelViewer {
       let count = 0;
       for (let i = 0; i < n; i++) {
         for (let j = i + 1; j < n; j++) {
-          sum += positions[i].distanceTo(positions[j]);
+          sum += unique[i].distanceTo(unique[j]);
           count++;
         }
       }
@@ -639,7 +655,7 @@ class ModelViewer {
       // Uniform stride sampling for spatial representativeness
       const step = Math.ceil(n / SAMPLE_THRESHOLD);
       const sample = [];
-      for (let i = 0; i < n; i += step) sample.push(positions[i]);
+      for (let i = 0; i < n; i += step) sample.push(unique[i]);
       const sn = sample.length;
       let sum = 0;
       let count = 0;
@@ -657,7 +673,7 @@ class ModelViewer {
     // --- Step 2: find all pairs with distance < 5% of average ---
     const threshold = avgDistance * 0.05;
     const closePairDistances = [];
-    const MAX_CLOSE_PAIRS = 500; // cap; 500 pairs at minimum 0.5 each = 250 pts, well over the 10-pt cap
+    const MAX_CLOSE_PAIRS = 500;
 
     const cellSize = threshold;
     const grid = new Map();
@@ -666,7 +682,7 @@ class ModelViewer {
     for (let i = 0; i < maxCheck; i++) {
       if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
 
-      const p = positions[i];
+      const p = unique[i];
       const gx = Math.floor(p.x / cellSize);
       const gy = Math.floor(p.y / cellSize);
       const gz = Math.floor(p.z / cellSize);
@@ -682,7 +698,7 @@ class ModelViewer {
             const neighbors = grid.get(nkey);
             if (neighbors) {
               for (const idx of neighbors) {
-                const d = positions[idx].distanceTo(p);
+                const d = unique[idx].distanceTo(p);
                 if (d < threshold) {
                   closePairDistances.push(d);
                   if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
