@@ -4,7 +4,7 @@
  * Scoring criteria (11 dimensions, normalized to 100):
  * 1. 隐藏面 (Hidden Faces) - 10
  * 2. 破面 (Broken Faces) - 10
- * 3. 重合点 (Overlapping Vertices) - 10 (distance < 5% of avg pairwise distance)
+ * 3. 重合点 (Overlapping Vertices) - 10 (spatial hash, EPS=0.0001, 1pt/pair)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
  * 6. UV利用度 (UV Utilization) - 20
@@ -183,42 +183,13 @@ class ModelEvaluator {
    */
   static _evalOverlappingVerts(geo) {
     const max = RAW_MAX.overlappingVerts;
+    const pairs = geo.duplicateVertexPairs || 0;
 
-    const avg = geo.pairDistanceAvg;
-    const distances = geo.closePairDistances;
+    // Each duplicate vertex pair deducts 1 point, capped at max (10)
+    const deduction = Math.min(pairs * 1, max);
+    const score = Math.max(max - deduction, 0);
 
-    // No data or no close pairs → full score
-    if (!avg || avg < 1e-10 || !distances || distances.length === 0) {
-      console.log('[重合点] 无近距点对，满分');
-      return max;
-    }
-
-    let totalDeduction = 0;
-
-    for (const d of distances) {
-      const percentage = (d / avg) * 100; // how many % of avg this distance is
-
-      if (percentage < 5) {
-        // Number of full percentage points below the 5% threshold
-        const belowPercent = Math.floor(5 - percentage);
-        // Deduction doubles for each pp below: 0.5 × 2^belowPercent
-        const deduction = 0.5 * Math.pow(2, belowPercent);
-        totalDeduction += deduction;
-      }
-    }
-
-    const finalDeduction = Math.min(totalDeduction, max);
-    const score = Math.max(max - finalDeduction, 0);
-
-    console.log(`[重合点] 平均距离=${avg.toFixed(6)}, 阈值(5%)=${(avg * 0.05).toFixed(6)}, 近距点对数=${distances.length}, 总扣分=${totalDeduction.toFixed(2)}(封顶${finalDeduction.toFixed(2)}), 得分=${score.toFixed(2)}`);
-    if (distances.length <= 10) {
-      distances.forEach((d, i) => {
-        const pct = (d / avg) * 100;
-        const below = Math.floor(5 - pct);
-        const ded = 0.5 * Math.pow(2, below);
-        console.log(`  对${i}: 距离=${d.toFixed(6)} (${pct.toFixed(2)}% of avg), 扣${ded.toFixed(2)}分`);
-      });
-    }
+    console.log(`[重合点] 重复顶点对=${pairs}, 每对扣1分, 总扣分=${deduction}, 得分=${score}`);
 
     return score;
   }
