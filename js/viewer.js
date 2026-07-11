@@ -9,6 +9,9 @@
  *   - MetallicMap (metalnessMap)
  *   - Roughness (roughnessMap)
  *   - Emission (emissiveMap)
+ *
+ * Also provides shape fingerprint and ring-line circumference analysis
+ * for human model similarity comparison and joint wiring evaluation.
  */
 
 import * as THREE from 'three';
@@ -26,16 +29,17 @@ class ModelViewer {
     this.mode = 'gray';
     this.mesh = null;
     this.geometryData = null;
+    this.shapeFingerprint = null;   // For similarity comparison
+    this.ringLineData = null;       // For joint wiring analysis
 
     // PBR textures - uploaded separately by user
     this.textures = {
-      baseColor: null,   // THREE.Texture
+      baseColor: null,
       normalMap: null,
       metallicMap: null,
       roughness: null,
       emission: null,
     };
-    // Texture file references (for evaluator)
     this.textureFiles = {
       baseColor: null,
       normalMap: null,
@@ -43,7 +47,6 @@ class ModelViewer {
       roughness: null,
       emission: null,
     };
-    // Texture image data (for pixel-level analysis)
     this.textureImageData = {
       baseColor: null,
       normalMap: null,
@@ -58,8 +61,8 @@ class ModelViewer {
   }
 
   _initThree() {
-    const w = this.container.clientWidth;
-    const h = this.container.clientHeight;
+    const w = this.container.clientWidth || 400;
+    const h = this.container.clientHeight || 320;
 
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1e1e2e);
@@ -79,29 +82,23 @@ class ModelViewer {
     this.controls.enableDamping = true;
     this.controls.dampingFactor = 0.08;
 
-    // Ambient light for base illumination
     this.ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     this.scene.add(this.ambientLight);
 
-    // Directional light (DirectLight - used in material mode)
     this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
     this.directionalLight.position.set(5, 8, 5);
     this.scene.add(this.directionalLight);
 
-    // Secondary fill light for better PBR rendering
     this.fillLight = new THREE.DirectionalLight(0x8899ff, 0.3);
     this.fillLight.position.set(-5, 3, -5);
     this.scene.add(this.fillLight);
 
-    // Grid helper
     this.gridHelper = new THREE.GridHelper(10, 20, 0x444466, 0x333344);
     this.scene.add(this.gridHelper);
 
-    // Resize observer
     this._resizeObserver = new ResizeObserver(() => this._onResize());
     this._resizeObserver.observe(this.container);
 
-    // Info overlay
     this.infoDiv = document.createElement('div');
     this.infoDiv.className = 'viewer-info';
     this.container.appendChild(this.infoDiv);
@@ -152,9 +149,7 @@ class ModelViewer {
   _setupModel(object) {
     const meshes = [];
     object.traverse(child => {
-      if (child.isMesh) {
-        meshes.push(child);
-      }
+      if (child.isMesh) meshes.push(child);
     });
 
     if (meshes.length === 0) {
@@ -165,7 +160,6 @@ class ModelViewer {
     this.mesh = object;
     this.scene.add(object);
 
-    // Compute bounding box and normalize
     const box = new THREE.Box3().setFromObject(object);
     const size = box.getSize(new THREE.Vector3());
     const center = box.getCenter(new THREE.Vector3());
@@ -175,28 +169,250 @@ class ModelViewer {
     object.scale.setScalar(scale);
     object.position.sub(center.multiplyScalar(scale));
 
-    // Adjust camera
     const dist = 4;
     this.camera.position.set(dist, dist * 0.7, dist);
     this.controls.target.set(0, 0, 0);
     this.controls.update();
 
-    // Collect geometry data for evaluation
     this._collectGeometryData(meshes);
+    this._computeShapeFingerprint();
+    this._computeRingLineData();
 
-    // Apply initial mode
     this.setMode('gray');
 
-    // Update info
     const totalVerts = this.geometryData.totalVertices;
     const totalFaces = this.geometryData.totalFaces;
     this.infoDiv.textContent = `顶点: ${totalVerts.toLocaleString()} | 面: ${totalFaces.toLocaleString()}`;
   }
 
   /**
-   * Set/update PBR textures from user-uploaded files
-   * @param {Object} textureFiles - { baseColor, normalMap, metallicMap, roughness, emission }
+   * Compute shape fingerprint for similarity comparison with standard human model.
+   * The fingerprint includes:
+   * - Bounding box proportions (width/height/depth ratio)
+   * - Vertex density distribution along Y axis (body height segments)
+   * - Overall silhouette characteristics
    */
+  _computeShapeFingerprint() {
+    if (!this.geometryData || !this.geometryData.positions || this.geometryData.positions.length === 0) {
+      this.shapeFingerprint = null;
+      return;
+    }
+
+    const positions = this.geometryData.positions;
+
+    // Find bounding box from actual positions
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+    let minZ = Infinity, maxZ = -Infinity;
+
+    for (const p of positions) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+      if (p.z < minZ) minZ = p.z;
+      if (p.z > maxZ) maxZ = p.z;
+    }
+
+    const width = maxX - minX;
+    const height = maxY - minY;
+    const depth = maxZ - minZ;
+
+    // Proportion ratios (normalized to height = 1)
+    const heightNorm = Math.max(height, 0.001);
+    const widthRatio = width / heightNorm;
+    const depthRatio = depth / heightNorm;
+
+    // Vertex density distribution along Y axis (10 segments)
+    const segments = 10;
+    const segmentHeight = height / segments;
+    const density = new Array(segments).fill(0);
+
+    for (const p of positions) {
+      const seg = Math.floor((p.y - minY) / Math.max(segmentHeight, 0.0001));
+      if (seg >= 0 && seg < segments) {
+        density[seg]++;
+      }
+    }
+
+    // Normalize density to percentages
+    const totalVerts = positions.length;
+    const densityPct = density.map(d => d / Math.max(totalVerts, 1));
+
+    // Cross-section width at each Y segment (approximate silhouette)
+    const crossWidth = new Array(segments).fill(0);
+    const crossDepth = new Array(segments).fill(0);
+    const segMinX = new Array(segments).fill(Infinity);
+    const segMaxX = new Array(segments).fill(-Infinity);
+    const segMinZ = new Array(segments).fill(Infinity);
+    const segMaxZ = new Array(segments).fill(-Infinity);
+
+    for (const p of positions) {
+      const seg = Math.floor((p.y - minY) / Math.max(segmentHeight, 0.0001));
+      if (seg >= 0 && seg < segments) {
+        if (p.x < segMinX[seg]) segMinX[seg] = p.x;
+        if (p.x > segMaxX[seg]) segMaxX[seg] = p.x;
+        if (p.z < segMinZ[seg]) segMinZ[seg] = p.z;
+        if (p.z > segMaxZ[seg]) segMaxZ[seg] = p.z;
+      }
+    }
+
+    for (let i = 0; i < segments; i++) {
+      crossWidth[i] = (segMaxX[i] - segMinX[i]) / heightNorm;
+      crossDepth[i] = (segMaxZ[i] - segMinZ[i]) / heightNorm;
+    }
+
+    this.shapeFingerprint = {
+      widthRatio,
+      depthRatio,
+      heightNorm,
+      densityPct,
+      crossWidth,
+      crossDepth,
+      totalVertices: this.geometryData.totalVertices,
+    };
+  }
+
+  /**
+   * Compute ring-line circumference data for joint wiring analysis.
+   * A "ring line" (环线) is a set of edges that form a horizontal loop
+   * at roughly the same Y height. We slice the model along Y axis,
+   * find connected edge loops at each slice, and compute their circumferences.
+   */
+  _computeRingLineData() {
+    if (!this.geometryData || !this.geometryData.positions || this.geometryData.positions.length === 0) {
+      this.ringLineData = null;
+      return;
+    }
+
+    const positions = this.geometryData.positions;
+    const edgeLengths = this.geometryData.edgeLengths;
+
+    // Find Y range
+    let minY = Infinity, maxY = -Infinity;
+    for (const p of positions) {
+      if (p.y < minY) minY = p.y;
+      if (p.y > maxY) maxY = p.y;
+    }
+
+    const height = maxY - minY;
+    if (height < 0.01) {
+      this.ringLineData = null;
+      return;
+    }
+
+    // Slice model into horizontal bands and compute cross-section circumferences
+    // using vertex positions at each band
+    const sliceCount = 30; // 30 horizontal slices
+    const sliceHeight = height / sliceCount;
+    const circumferences = [];
+
+    for (let s = 0; s < sliceCount; s++) {
+      const sliceY = minY + s * sliceHeight;
+      const halfBand = sliceHeight * 0.5; // Band width to collect vertices
+
+      // Collect vertices in this horizontal band
+      const bandVerts = [];
+      for (const p of positions) {
+        if (Math.abs(p.y - sliceY) < halfBand) {
+          bandVerts.push(p);
+        }
+      }
+
+      if (bandVerts.length < 3) continue;
+
+      // Compute approximate circumference by sorting vertices around center
+      const centerX = bandVerts.reduce((sum, v) => sum + v.x, 0) / bandVerts.length;
+      const centerZ = bandVerts.reduce((sum, v) => sum + v.z, 0) / bandVerts.length;
+
+      // Sort by angle around center axis (Y axis)
+      const sorted = bandVerts.map(v => {
+        const angle = Math.atan2(v.z - centerZ, v.x - centerX);
+        return { angle, x: v.x, z: v.z };
+      }).sort((a, b) => a.angle - b.angle);
+
+      // Compute circumference as sum of consecutive edge distances
+      let circumference = 0;
+      for (let i = 0; i < sorted.length; i++) {
+        const next = sorted[(i + 1) % sorted.length];
+        const dx = next.x - sorted[i].x;
+        const dz = next.z - sorted[i].z;
+        circumference += Math.sqrt(dx * dx + dz * dz);
+      }
+
+      circumferences.push({
+        sliceIndex: s,
+        yPosition: sliceY,
+        relativeY: (sliceY - minY) / height, // 0-1 normalized height
+        circumference,
+        vertexCount: bandVerts.length,
+      });
+    }
+
+    if (circumferences.length < 5) {
+      this.ringLineData = null;
+      return;
+    }
+
+    // Compute average circumference
+    const avgCirc = circumferences.reduce((sum, c) => sum + c.circumference, 0) / circumferences.length;
+
+    // Find joint regions: circumferences < 50% of average
+    const jointThreshold = avgCirc * 0.5;
+    const jointRings = circumferences.filter(c => c.circumference < jointThreshold);
+    const jointRatio = jointRings.length / circumferences.length;
+
+    this.ringLineData = {
+      circumferences,
+      avgCircumference: avgCirc,
+      jointThreshold,
+      jointRings,
+      jointRatio,
+      totalRings: circumferences.length,
+    };
+  }
+
+  /**
+   * Compute similarity between this model and a standard model's fingerprint.
+   * Returns a value between 0 and 1.
+   */
+  computeSimilarity(standardFingerprint) {
+    if (!this.shapeFingerprint || !standardFingerprint) return 0;
+
+    let score = 0;
+
+    // 1. Bounding box proportion similarity (weight: 30%)
+    const widthDiff = Math.abs(this.shapeFingerprint.widthRatio - standardFingerprint.widthRatio);
+    const depthDiff = Math.abs(this.shapeFingerprint.depthRatio - standardFingerprint.depthRatio);
+    const proportionScore = Math.max(0, 1 - (widthDiff + depthDiff) * 0.5);
+    score += proportionScore * 0.30;
+
+    // 2. Vertex density distribution similarity (weight: 40%)
+    const thisDensity = this.shapeFingerprint.densityPct;
+    const stdDensity = standardFingerprint.densityPct;
+    let densityDiff = 0;
+    for (let i = 0; i < Math.min(thisDensity.length, stdDensity.length); i++) {
+      densityDiff += Math.abs(thisDensity[i] - stdDensity[i]);
+    }
+    const densityScore = Math.max(0, 1 - densityDiff * 2);
+    score += densityScore * 0.40;
+
+    // 3. Cross-section silhouette similarity (weight: 30%)
+    const thisWidth = this.shapeFingerprint.crossWidth;
+    const stdWidth = standardFingerprint.crossWidth;
+    const thisDepth = this.shapeFingerprint.crossDepth;
+    const stdDepth = standardFingerprint.crossDepth;
+    let silhouetteDiff = 0;
+    for (let i = 0; i < Math.min(thisWidth.length, stdWidth.length); i++) {
+      silhouetteDiff += Math.abs(thisWidth[i] - stdWidth[i]);
+      silhouetteDiff += Math.abs(thisDepth[i] - stdDepth[i]);
+    }
+    const silhouetteScore = Math.max(0, 1 - silhouetteDiff * 0.5);
+    score += silhouetteScore * 0.30;
+
+    return score;
+  }
+
   async setTextures(textureFiles) {
     const loader = new THREE.TextureLoader();
 
@@ -215,37 +431,30 @@ class ModelViewer {
         const texture = await loader.loadAsync(url);
         URL.revokeObjectURL(url);
 
-        // Color textures use SRGB, data textures use linear
         if (key === 'baseColor' || key === 'emission') {
           texture.colorSpace = THREE.SRGBColorSpace;
         } else {
           texture.colorSpace = THREE.NoColorSpace;
         }
-        texture.flipY = false; // Standard for PBR textures
+        texture.flipY = false;
 
         this.textures[key] = texture;
-
-        // Extract image data for evaluation
         this._extractImageData(key, file);
       } catch (e) {
         console.error(`Failed to load texture ${key}:`, e);
       }
     }
 
-    // Re-apply current mode to update materials
     if (this.mesh) {
       this.setMode(this.mode);
     }
   }
 
-  /**
-   * Extract pixel data from texture image for evaluation
-   */
   async _extractImageData(key, file) {
     try {
       const img = await this._loadImage(file);
       const canvas = document.createElement('canvas');
-      const maxSize = 512; // Downscale for analysis performance
+      const maxSize = 512;
       const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
       canvas.width = Math.max(1, Math.round(img.width * scale));
       canvas.height = Math.max(1, Math.round(img.height * scale));
@@ -289,7 +498,6 @@ class ModelViewer {
 
       totalVertices += posAttr.count;
 
-      // Collect vertex positions in world space (limit for performance)
       const worldMatrix = mesh.matrixWorld;
       const posLimit = Math.min(posAttr.count, 50000);
       for (let i = 0; i < posLimit; i++) {
@@ -298,7 +506,6 @@ class ModelViewer {
         positions.push(v);
       }
 
-      // Faces (limit processing for performance)
       const faceLimit = 50000;
       if (geo.index) {
         totalFaces += geo.index.count / 3;
@@ -335,7 +542,6 @@ class ModelViewer {
         }
       }
 
-      // UV data
       if (geo.attributes.uv) {
         hasUV = true;
       }
@@ -427,7 +633,6 @@ class ModelViewer {
           break;
 
         case 'color':
-          // Show BaseColor map only
           if (this.textures.baseColor) {
             child.material = new THREE.MeshStandardMaterial({
               map: this.textures.baseColor,
@@ -443,36 +648,24 @@ class ModelViewer {
           break;
 
         case 'material':
-          // Full PBR material with all maps + directional light
           const mat = new THREE.MeshStandardMaterial({
             roughness: 0.5,
             metalness: 0.5,
           });
 
-          // BaseColor (diffuse/albedo map)
-          if (this.textures.baseColor) {
-            mat.map = this.textures.baseColor;
-          }
-
-          // Normal map
+          if (this.textures.baseColor) mat.map = this.textures.baseColor;
           if (this.textures.normalMap) {
             mat.normalMap = this.textures.normalMap;
             mat.normalScale = new THREE.Vector2(1, 1);
           }
-
-          // Metallic map
           if (this.textures.metallicMap) {
             mat.metalnessMap = this.textures.metallicMap;
-            mat.metalness = 1.0; // Use map to control metalness
+            mat.metalness = 1.0;
           }
-
-          // Roughness map
           if (this.textures.roughness) {
             mat.roughnessMap = this.textures.roughness;
-            mat.roughness = 1.0; // Use map to control roughness
+            mat.roughness = 1.0;
           }
-
-          // Emission map
           if (this.textures.emission) {
             mat.emissiveMap = this.textures.emission;
             mat.emissive = new THREE.Color(0xffffff);
@@ -481,7 +674,6 @@ class ModelViewer {
 
           child.material = mat;
 
-          // Enhanced lighting for PBR material mode
           this.directionalLight.intensity = 2.5;
           this.ambientLight.intensity = 0.25;
           this.fillLight.intensity = 0.4;
@@ -489,7 +681,6 @@ class ModelViewer {
       }
     });
 
-    // Reset light intensity for non-material modes
     if (mode !== 'material') {
       this.directionalLight.intensity = 1.5;
       this.ambientLight.intensity = 0.4;
@@ -527,13 +718,18 @@ class ModelViewer {
     return this.geometryData;
   }
 
+  getShapeFingerprint() {
+    return this.shapeFingerprint;
+  }
+
+  getRingLineData() {
+    return this.ringLineData;
+  }
+
   hasTextures() {
     return !!this.textures.baseColor;
   }
 
-  /**
-   * Get texture info for evaluator
-   */
   getTextureInfo() {
     return {
       hasColorMap: !!this.textures.baseColor,
