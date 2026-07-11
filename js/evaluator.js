@@ -4,7 +4,7 @@
  * Scoring criteria (11 dimensions, normalized to 100):
  * 1. 隐藏面 (Hidden Faces) - 10
  * 2. 破面 (Broken Faces) - 10
- * 3. 重合点 (Overlapping Vertices) - 10 (threshold: 0.0001cm)
+ * 3. 重合点 (Overlapping Vertices) - 10 (distance < 5% of avg pairwise distance)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
  * 6. UV利用度 (UV Utilization) - 20
@@ -161,12 +161,53 @@ class ModelEvaluator {
     return Math.max(max - penalty, 0);
   }
 
+  /**
+   * 重合点 (Overlapping / Too-close Vertices)
+   *
+   * Scoring criterion: 模型上是否有相距距离过近的点
+   *
+   * Deduction logic:
+   * 1. Compute ALL pairwise distances between vertices → database
+   * 2. Take the average of all distances → avg
+   * 3. For each pair with distance < 5% of avg:
+   *    - Base deduction: 0.5 per pair
+   *    - For each full percentage point below 5%: deduction doubles
+   *      e.g. 4% of avg → 1 pp below → 0.5 × 2 = 1.0
+   *           3% of avg → 2 pp below → 0.5 × 4 = 2.0
+   *           2% of avg → 3 pp below → 0.5 × 8 = 4.0
+   *           1% of avg → 4 pp below → 0.5 × 16 = 8.0
+   *           0% of avg → 5 pp below → 0.5 × 32 = 16.0
+   * 4. Total deduction capped at 10; score never goes negative.
+   *
+   * Example: 2 pairs at 4% of avg → 0.5×2 × 2 pairs = 2.0 pts deducted.
+   */
   static _evalOverlappingVerts(geo) {
     const max = RAW_MAX.overlappingVerts;
-    const pairs = geo.overlappingPairs || 0;
-    // 每组扣0.5分
-    const penalty = Math.min(pairs * 0.5, max);
-    return Math.max(max - penalty, 0);
+
+    const avg = geo.pairDistanceAvg;
+    const distances = geo.closePairDistances;
+
+    // No data or no close pairs → full score
+    if (!avg || avg < 1e-10 || !distances || distances.length === 0) {
+      return max;
+    }
+
+    let totalDeduction = 0;
+
+    for (const d of distances) {
+      const percentage = (d / avg) * 100; // how many % of avg this distance is
+
+      if (percentage < 5) {
+        // Number of full percentage points below the 5% threshold
+        const belowPercent = Math.floor(5 - percentage);
+        // Deduction doubles for each pp below: 0.5 × 2^belowPercent
+        const deduction = 0.5 * Math.pow(2, belowPercent);
+        totalDeduction += deduction;
+      }
+    }
+
+    // Cap deduction at max (10), score never negative
+    return Math.max(max - Math.min(totalDeduction, max), 0);
   }
 
   static _evalWireUniformity(geo) {
