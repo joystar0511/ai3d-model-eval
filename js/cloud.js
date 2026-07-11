@@ -32,8 +32,11 @@ class CloudStorage {
         vertices: modelData.meta?.vertices || 0,
         faces: modelData.meta?.faces || 0,
         hasTextures: modelData.meta?.hasTextures || false,
+        textureCount: modelData.meta?.textureCount || 0,
         fileName: modelData.meta?.fileName || '',
         fileSize: modelData.meta?.fileSize || 0,
+        isCharacterModel: modelData.meta?.isCharacterModel || false,
+        similarity: modelData.meta?.similarity || 0,
       },
       sharedAt: new Date().toISOString(),
       sharedBy: this._getUserTag(),
@@ -84,6 +87,14 @@ class CloudStorage {
     }
 
     // Fallback: localStorage
+    return this._getSharedList();
+  }
+
+  /**
+   * Get all shared models from the library (synchronous for inline display)
+   * @returns {Array} list of shared models
+   */
+  static getAllModels() {
     return this._getSharedList();
   }
 
