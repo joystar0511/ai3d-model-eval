@@ -580,8 +580,8 @@ class ModelViewer {
 
     totalEdges = edgeLengths.length;
 
-    // Count duplicate (overlapping) vertices using spatial hash
-    const duplicateVertexPairs = this._countDuplicateVertices(positions);
+    // Count unmerged vertices (exact same position) using hash map
+    const unmergedPairs = this._countUnmergedVertices(positions);
     const hiddenFaces = this._findHiddenFaces(faceNormals);
 
     const avgEdgeLength = edgeLengths.reduce((a, b) => a + b, 0) / Math.max(edgeLengths.length, 1);
@@ -595,7 +595,7 @@ class ModelViewer {
       uvs,
       edgeLengths,
       faceNormals,
-      duplicateVertexPairs,
+      unmergedPairs,
       hiddenFaces,
       avgEdgeLength,
       edgeLengthVariance,
@@ -605,60 +605,29 @@ class ModelViewer {
   }
 
   /**
-   * Count duplicate (overlapping) vertex pairs using a spatial hash grid.
+   * Count unmerged vertex pairs — vertices at the EXACT same position.
    *
-   * Two vertices within EPS = 0.0001 of each other are considered "duplicate".
-   * Each such pair counts as one duplicate pair.
+   * In BufferGeometry, one logical vertex may be split into multiple entries
+   * (different normals / UVs) with identical position values. These are
+   * "未合并点" (unmerged vertices). Each pair deducts 0.05 points.
    *
-   * Returns the number of duplicate pairs found.
+   * Uses exact coordinate string matching (EPS = 0).
    */
-  _countDuplicateVertices(positions) {
-    const EPS = 0.0001; // 0.000001 * 100
-    const cellSize = EPS;
-    const grid = new Map();
+  _countUnmergedVertices(positions) {
+    const positionMap = new Map();
     let pairCount = 0;
-    const MAX_PAIRS = 10; // cap at 10 pairs = 10 points deduction max
 
     for (let i = 0; i < positions.length; i++) {
-      if (pairCount >= MAX_PAIRS) break;
-
       const p = positions[i];
-      const gx = Math.floor(p.x / cellSize);
-      const gy = Math.floor(p.y / cellSize);
-      const gz = Math.floor(p.z / cellSize);
-
-      let isDuplicate = false;
-
-      // Check 3×3×3 neighbouring cells
-      for (let dx = -1; dx <= 1; dx++) {
-        if (isDuplicate || pairCount >= MAX_PAIRS) break;
-        for (let dy = -1; dy <= 1; dy++) {
-          if (isDuplicate || pairCount >= MAX_PAIRS) break;
-          for (let dz = -1; dz <= 1; dz++) {
-            if (isDuplicate || pairCount >= MAX_PAIRS) break;
-            const nkey = `${gx + dx},${gy + dy},${gz + dz}`;
-            const neighbors = grid.get(nkey);
-            if (neighbors) {
-              for (const idx of neighbors) {
-                const d = positions[idx].distanceTo(p);
-                if (d < EPS) {
-                  pairCount++;
-                  isDuplicate = true;
-                  break;
-                }
-              }
-            }
-          }
-        }
+      const key = `${p.x},${p.y},${p.z}`;
+      if (positionMap.has(key)) {
+        pairCount++;
+      } else {
+        positionMap.set(key, i);
       }
-
-      // Add current vertex to grid
-      const key = `${gx},${gy},${gz}`;
-      if (!grid.has(key)) grid.set(key, []);
-      grid.get(key).push(i);
     }
 
-    console.log(`[重合点-采集] 顶点数=${positions.length}, EPS=${EPS}, 重复顶点对=${pairCount}`);
+    console.log(`[未合并点-采集] 顶点数=${positions.length}, 唯一位置=${positionMap.size}, 未合并点对=${pairCount}`);
     return pairCount;
   }
 
