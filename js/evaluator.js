@@ -4,7 +4,7 @@
  * Scoring criteria (12 dimensions, normalized to 100):
  * 1. 隐藏面 (Hidden Faces) - 10
  * 2. 破面 (Broken Faces) - 10
- * 3. 重合点 (Unmerged Vertices) - 10 (exact same position, 0.05pt/pair)
+ * 3. 重合点 (Unmerged Vertices) - 10 (no deduction, recommendation tag only)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
  * 6. UV利用度 (UV Utilization) - 10
@@ -187,16 +187,11 @@ class ModelEvaluator {
    * Example: 2 pairs at 4% of avg → 0.5×2 × 2 pairs = 2.0 pts deducted.
    */
   static _evalOverlappingVerts(geo) {
+    // Unmerged vertices no longer affect score; only shown as a recommendation tag
     const max = RAW_MAX.overlappingVerts;
     const pairs = geo.unmergedPairs || 0;
-
-    // Each unmerged vertex pair deducts 0.05 points, capped at max (10)
-    const deduction = Math.min(pairs * 0.05, max);
-    const score = Math.max(max - deduction, 0);
-
-    console.log(`[未合并点] 未合并点对=${pairs}, 每对扣0.05分, 总扣分=${deduction.toFixed(2)}, 得分=${score.toFixed(2)}`);
-
-    return score;
+    console.log(`[未合并点] 未合并点对=${pairs}, 不扣分, 得分=${max}`);
+    return max;
   }
 
   static _evalWireUniformity(geo) {
