@@ -1,18 +1,19 @@
 /**
  * ModelEvaluator - AI 3D Topology Low-Poly Model Evaluation Engine
  *
- * Scoring criteria (11 dimensions, normalized to 100):
+ * Scoring criteria (12 dimensions, normalized to 100):
  * 1. 隐藏面 (Hidden Faces) - 10
  * 2. 破面 (Broken Faces) - 10
  * 3. 重合点 (Unmerged Vertices) - 10 (exact same position, 0.05pt/pair)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
- * 6. UV利用度 (UV Utilization) - 20
+ * 6. UV利用度 (UV Utilization) - 10
  * 7. 贴图细节与复杂性 (Texture Detail) - 10 (HSV bin analysis)
  * 8. 贴图色彩 (Texture Color) - 10 (brightness < 2 or > 253)
  * 9. 一致性与伪影 (Consistency & Artifacts) - 10 (model-space UV symmetry)
  * 10. 材质合理性 (Material Rationality) - 10
  * 11. 法线贴图质量 (Normal Map Quality) - 10
+ * 12. 模型光滑度 (Model Smoothness) - 10
  *
  * All scores retain 2 decimal places.
  * Internal deduction logic is NOT exposed to users.
@@ -24,12 +25,13 @@ const RAW_MAX = {
   overlappingVerts: 10,
   wireUniformity: 10,
   riggability: 10,
-  uvUtilization: 20,
+  uvUtilization: 10,
   textureDetail: 10,
   textureColor: 10,
   consistency: 10,
   materialRationality: 10,
   normalMapQuality: 10,
+  modelSmoothness: 10,
 };
 
 const RAW_TOTAL = Object.values(RAW_MAX).reduce((a, b) => a + b, 0); // 120
@@ -40,12 +42,13 @@ const DIMENSIONS = [
   { key: 'overlappingVerts',   name: '重合点',           max: 10 },
   { key: 'wireUniformity',     name: '布线均匀度',       max: 10 },
   { key: 'riggability',        name: '可绑定程度',       max: 10 },
-  { key: 'uvUtilization',      name: 'UV利用度',         max: 20 },
+  { key: 'uvUtilization',      name: 'UV利用度',         max: 10 },
   { key: 'textureDetail',      name: '贴图细节与复杂性',  max: 10 },
   { key: 'textureColor',       name: '贴图色彩',         max: 10 },
   { key: 'consistency',        name: '一致性与伪影',     max: 10 },
   { key: 'materialRationality',name: '材质合理性',       max: 10 },
   { key: 'normalMapQuality',   name: '法线贴图质量',     max: 10 },
+  { key: 'modelSmoothness',    name: '模型光滑度',       max: 10 },
 ];
 
 /** Round to 2 decimal places */
@@ -132,6 +135,7 @@ class ModelEvaluator {
       case 'consistency': return this._evalConsistency(geo, tex);
       case 'materialRationality': return this._evalMaterialRationality(tex);
       case 'normalMapQuality': return this._evalNormalMapQuality(tex);
+      case 'modelSmoothness': return this._evalModelSmoothness(geo);
       default: return 0;
     }
   }
@@ -548,15 +552,15 @@ class ModelEvaluator {
   static _evalMaterialRationality(tex) {
     const max = RAW_MAX.materialRationality;
 
-    // Start from full score; deduct 5 for each missing PBR map
+    // Start from full score; deduct 2 for each missing PBR map
     let score = max;
 
     const metalData = tex?.imageData?.metallicMap;
     const roughData = tex?.imageData?.roughness;
 
-    // No Metallic map → -5 points
+    // No Metallic map → -2 points
     if (!metalData) {
-      score -= 5;
+      score -= 2;
     } else {
       const { data } = metalData;
       let brightSum = 0;
@@ -575,9 +579,9 @@ class ModelEvaluator {
       }
     }
 
-    // No Roughness map → -5 points
+    // No Roughness map → -2 points
     if (!roughData) {
-      score -= 5;
+      score -= 2;
     } else {
       const { data } = roughData;
       let brightSum = 0;
@@ -601,11 +605,11 @@ class ModelEvaluator {
 
   static _evalNormalMapQuality(tex) {
     const max = RAW_MAX.normalMapQuality;
-    // No normal map uploaded → 0 points
-    if (!tex || !tex.hasNormalMap) return 0;
+    // No normal map uploaded → 8 points (baseline for missing texture)
+    if (!tex || !tex.hasNormalMap) return 8;
 
     const normalData = tex.imageData?.normalMap;
-    if (!normalData) return 0;
+    if (!normalData) return 8;
 
     const colorData = tex.imageData?.baseColor;
 
@@ -619,10 +623,15 @@ class ModelEvaluator {
     }
     const avgBlue = bSum / pixelCount;
 
+    // Good blue channel → bonus; poor blue channel → penalty (can go below 8)
     if (avgBlue > 180) {
       score += max * 0.2;
     } else if (avgBlue > 128) {
       score += max * 0.1;
+    } else if (avgBlue < 80) {
+      // Very poor normal map quality — penalty
+      const penalty = Math.min((80 - avgBlue) / 80 * max * 0.3, max * 0.3);
+      score -= penalty;
     }
 
     if (colorData && colorData.width === normalData.width) {
@@ -644,6 +653,9 @@ class ModelEvaluator {
         const correspondRatio = correspondCount / checkedPixels;
         if (correspondRatio > 0.7) {
           score += max * 0.2;
+        } else if (correspondRatio < 0.3) {
+          // Very poor correspondence — penalty (can go below 8)
+          score -= max * 0.15;
         } else {
           score += max * 0.1;
         }
@@ -651,6 +663,42 @@ class ModelEvaluator {
     }
 
     return Math.min(score, max);
+  }
+
+  /**
+   * 模型光滑度 (Model Smoothness)
+   *
+   * Scoring criterion: 造型是否过度圆润
+   *
+   * Deduction logic:
+   * - > 20000 triangles: deduct 0.5 per 1000 above 20000
+   * - < 5000 triangles: deduct 0.5 per 1000 below 5000
+   * - 5000-20000: compare with 15000, deduct 0.1 per 1000 deviation from 15000
+   *
+   * Score = max(0, 10 - total deduction)
+   */
+  static _evalModelSmoothness(geo) {
+    const max = RAW_MAX.modelSmoothness;
+    if (!geo || !geo.totalFaces) return max * 0.5;
+
+    const faces = geo.totalFaces;
+    let deduction = 0;
+
+    if (faces > 20000) {
+      const excess = faces - 20000;
+      deduction = (excess / 1000) * 0.5;
+    } else if (faces < 5000) {
+      const deficit = 5000 - faces;
+      deduction = (deficit / 1000) * 0.5;
+    } else {
+      // 5000-20000: compare with 15000
+      const deviation = Math.abs(faces - 15000);
+      deduction = (deviation / 1000) * 0.1;
+    }
+
+    const score = Math.max(max - deduction, 0);
+    console.log(`[模型光滑度] 面数=${faces}, 扣分=${deduction.toFixed(2)}, 得分=${score.toFixed(2)}`);
+    return score;
   }
 
   // === Texture sampling & HSV utilities ===
@@ -790,12 +838,24 @@ class ModelEvaluator {
     }
 
     const uvScore = scores.uvUtilization;
-    if (uvScore >= 16) {
+    if (uvScore >= 8) {
       analyses.push({ title: 'UV展开', content: 'UV利用率良好，UV壳在UV空间内分布合理。' });
-    } else if (uvScore >= 10) {
+    } else if (uvScore >= 5) {
       analyses.push({ title: 'UV展开', content: 'UV利用率一般，部分UV壳可能存在重叠或浪费空间的情况。' });
     } else {
       analyses.push({ title: 'UV展开', content: 'UV利用率较低，建议重新进行UV展开以优化空间利用率。' });
+    }
+
+    // Model smoothness analysis
+    const smoothScore = scores.modelSmoothness;
+    if (fc > 20000) {
+      analyses.push({ title: '模型光滑度', content: `模型面数（${fc.toLocaleString()}）偏高，造型可能过度圆润，建议减少面数至20000以下以优化性能。` });
+    } else if (fc < 5000) {
+      analyses.push({ title: '模型光滑度', content: `模型面数（${fc.toLocaleString()}）偏低，造型细节可能不足，建议增加面数至5000以上以改善圆润度。` });
+    } else if (smoothScore >= 9) {
+      analyses.push({ title: '模型光滑度', content: `模型面数（${fc.toLocaleString()}）接近理想范围（5000-20000），光滑度适中。` });
+    } else {
+      analyses.push({ title: '模型光滑度', content: `模型面数（${fc.toLocaleString()}）在合理范围内，但偏离理想值15000，光滑度可进一步优化。` });
     }
 
     if (tex?.hasColorMap) {
@@ -809,12 +869,22 @@ class ModelEvaluator {
       }
     }
 
-    if (tex?.hasNormalMap || tex?.hasMetalnessMap || tex?.hasRoughnessMap) {
+    // Material analysis (always show — scores exist even without maps)
+    {
       const matScore = (scores.materialRationality + scores.normalMapQuality) / 2;
-      if (matScore >= 7) {
+      const missingMaps = [];
+      if (!tex?.hasNormalMap) missingMaps.push('法线贴图');
+      if (!tex?.hasMetalnessMap) missingMaps.push('金属度贴图');
+      if (!tex?.hasRoughnessMap) missingMaps.push('粗糙度贴图');
+
+      if (matScore >= 8 && missingMaps.length === 0) {
         analyses.push({ title: '材质表现', content: '材质贴图配置完整，法线贴图与颜色贴图对应良好，金属度与粗糙度参数合理。' });
-      } else {
+      } else if (missingMaps.length > 0) {
+        analyses.push({ title: '材质表现', content: `缺失${missingMaps.join('、')}，材质配置不完整。建议补充相应贴图以提升渲染效果。` });
+      } else if (matScore >= 6) {
         analyses.push({ title: '材质表现', content: '材质贴图配置基本可用，但部分通道参数可能需要调整以达到更好的渲染效果。' });
+      } else {
+        analyses.push({ title: '材质表现', content: '材质贴图存在较多问题，建议检查法线贴图质量及金属度/粗糙度参数。' });
       }
     }
 
