@@ -580,11 +580,14 @@ class ModelViewer {
 
     totalEdges = edgeLengths.length;
 
-    // Compute close-pair data: average pairwise distance + pairs below 5% of average
-    const closePairData = this._computeClosePairData(positions);
+    // Compute close-pair data: average edge length as baseline + pairs below 5% of average
+    const avgEdgeLengthPre = edgeLengths.length > 0
+      ? edgeLengths.reduce((a, b) => a + b, 0) / edgeLengths.length
+      : 0;
+    const closePairData = this._computeClosePairData(positions, avgEdgeLengthPre);
     const hiddenFaces = this._findHiddenFaces(faceNormals);
 
-    const avgEdgeLength = edgeLengths.reduce((a, b) => a + b, 0) / Math.max(edgeLengths.length, 1);
+    const avgEdgeLength = avgEdgeLengthPre;
     const edgeLengthVariance = edgeLengths.reduce((sum, len) => sum + Math.pow(len - avgEdgeLength, 2), 0) / Math.max(edgeLengths.length, 1);
 
     this.geometryData = {
@@ -609,21 +612,19 @@ class ModelViewer {
    * Compute close-pair data for the "重合点" scoring dimension.
    *
    * Algorithm:
-   * 1. Compute the average of ALL pairwise distances (sampled for large models).
-   * 2. Use a spatial hash grid to efficiently find every pair whose distance
-   *    is below 5% of that average.
+   * 1. Deduplicate buffer-geometry positions (same vertex may appear
+   *    multiple times with different normals/UVs).
+   * 2. Use the average EDGE LENGTH as the baseline ("平均值").
+   * 3. Use a spatial hash grid to efficiently find every pair whose
+   *    distance is below 5% of that average.
    *
    * Returns { avg, distances } where:
-   *   avg        — average pairwise distance
+   *   avg        — average edge length (the "平均值" in scoring criteria)
    *   distances  — array of actual distances for pairs below 5% of avg
    */
-  _computeClosePairData(positions) {
+  _computeClosePairData(positions, avgEdgeLength) {
     // --- Step 0: deduplicate positions ---
-    // Buffer geometry often splits one logical vertex into multiple entries
-    // (different normals / UVs). These duplicates sit at the exact same
-    // coordinates and would produce distance-0 pairs that instantly max out
-    // the deduction. We only care about *unique* spatial points.
-    const DEDUP_EPS = 1e-6; // 0.000001 units ≈ 0.0001cm
+    const DEDUP_EPS = 1e-6;
     const seen = new Set();
     const unique = [];
     for (const p of positions) {
@@ -635,43 +636,18 @@ class ModelViewer {
     }
 
     const n = unique.length;
-    if (n < 2) return { avg: 0, distances: [] };
-
-    // --- Step 1: average pairwise distance ---
-    const SAMPLE_THRESHOLD = 3000; // exact if n ≤ 3000, otherwise sample
-    let avgDistance = 0;
-
-    if (n <= SAMPLE_THRESHOLD) {
-      let sum = 0;
-      let count = 0;
-      for (let i = 0; i < n; i++) {
-        for (let j = i + 1; j < n; j++) {
-          sum += unique[i].distanceTo(unique[j]);
-          count++;
-        }
-      }
-      avgDistance = count > 0 ? sum / count : 0;
-    } else {
-      // Uniform stride sampling for spatial representativeness
-      const step = Math.ceil(n / SAMPLE_THRESHOLD);
-      const sample = [];
-      for (let i = 0; i < n; i += step) sample.push(unique[i]);
-      const sn = sample.length;
-      let sum = 0;
-      let count = 0;
-      for (let i = 0; i < sn; i++) {
-        for (let j = i + 1; j < sn; j++) {
-          sum += sample[i].distanceTo(sample[j]);
-          count++;
-        }
-      }
-      avgDistance = count > 0 ? sum / count : 0;
+    if (n < 2 || !avgEdgeLength || avgEdgeLength < 1e-10) {
+      console.log(`[重合点-采集] 唯一顶点=${n}, 平均边长=${avgEdgeLength?.toFixed(6)}, 跳过(数据不足)`);
+      return { avg: 0, distances: [] };
     }
 
-    if (avgDistance < 1e-10) return { avg: 0, distances: [] };
+    // --- Step 1: use average edge length as the baseline ---
+    const avgDistance = avgEdgeLength;
+    const threshold = avgDistance * 0.05;
+
+    console.log(`[重合点-采集] 原始顶点=${positions.length}, 去重后=${n}, 平均边长=${avgDistance.toFixed(6)}, 5%阈值=${threshold.toFixed(6)}`);
 
     // --- Step 2: find all pairs with distance < 5% of average ---
-    const threshold = avgDistance * 0.05;
     const closePairDistances = [];
     const MAX_CLOSE_PAIRS = 500;
 
@@ -687,7 +663,6 @@ class ModelViewer {
       const gy = Math.floor(p.y / cellSize);
       const gz = Math.floor(p.z / cellSize);
 
-      // Check 3×3×3 neighbouring cells
       for (let dx = -1; dx <= 1; dx++) {
         if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
         for (let dy = -1; dy <= 1; dy++) {
@@ -709,10 +684,17 @@ class ModelViewer {
         }
       }
 
-      // Add current vertex to grid AFTER checking (avoids self-pairing & double counting)
       const key = `${gx},${gy},${gz}`;
       if (!grid.has(key)) grid.set(key, []);
       grid.get(key).push(i);
+    }
+
+    console.log(`[重合点-采集] 找到近距点对=${closePairDistances.length}对`);
+    if (closePairDistances.length > 0 && closePairDistances.length <= 20) {
+      closePairDistances.forEach((d, i) => {
+        const pct = (d / avgDistance) * 100;
+        console.log(`  对${i}: 距离=${d.toFixed(6)} (${pct.toFixed(2)}% of 平均边长)`);
+      });
     }
 
     return { avg: avgDistance, distances: closePairDistances };
