@@ -4,7 +4,7 @@
  * Scoring criteria (11 dimensions, normalized to 100):
  * 1. 隐藏面 (Hidden Faces) - 10
  * 2. 破面 (Broken Faces) - 10
- * 3. 重合点 (Overlapping Vertices) - 10 (spatial hash, EPS=0.0001, 1pt/pair)
+ * 3. 重合点 (Unmerged Vertices) - 10 (exact same position, 0.05pt/pair)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
  * 6. UV利用度 (UV Utilization) - 20
@@ -113,6 +113,7 @@ class ModelEvaluator {
       analysis,
       isCharacterModel,
       similarity: r2(similarity * 100),
+      unmergedPairs: geometryData?.unmergedPairs || 0,
     };
   }
 
@@ -183,13 +184,13 @@ class ModelEvaluator {
    */
   static _evalOverlappingVerts(geo) {
     const max = RAW_MAX.overlappingVerts;
-    const pairs = geo.duplicateVertexPairs || 0;
+    const pairs = geo.unmergedPairs || 0;
 
-    // Each duplicate vertex pair deducts 1 point, capped at max (10)
-    const deduction = Math.min(pairs * 1, max);
+    // Each unmerged vertex pair deducts 0.05 points, capped at max (10)
+    const deduction = Math.min(pairs * 0.05, max);
     const score = Math.max(max - deduction, 0);
 
-    console.log(`[重合点] 重复顶点对=${pairs}, 每对扣1分, 总扣分=${deduction}, 得分=${score}`);
+    console.log(`[未合并点] 未合并点对=${pairs}, 每对扣0.05分, 总扣分=${deduction.toFixed(2)}, 得分=${score.toFixed(2)}`);
 
     return score;
   }
