@@ -39,17 +39,17 @@
         </tr>
         <tr>
           <td class="item-col">破面</td>
-          <td>模型是否有破面</td>
+          <td>模型是否有破面（退化三角形、零长度边）</td>
           <td class="score-col">10</td>
         </tr>
         <tr>
           <td class="item-col">重合点</td>
-          <td>模型上是否有两个相距 0.01m 这种距离过近的点</td>
+          <td>模型上是否有相距距离过近的点。取所有顶点两两距离求平均值，距离小于平均值 5% 的每对点扣 0.5 分，每再低 1 个百分点扣分翻倍（如 4% 扣 1 分/对、3% 扣 2 分/对），最多扣 10 分</td>
           <td class="score-col">10</td>
         </tr>
         <tr>
           <td class="item-col">布线均匀度</td>
-          <td>布线是否均匀，读取每个点到每个点之间的距离值，记录所有点之间的值形成一个数据库</td>
+          <td>读取所有边的长度值，与平均边长对比，过长（&gt;平均 1.3 倍）或过短（&lt;平均）的边占比越高扣分越多</td>
           <td class="score-col">10</td>
         </tr>
         <tr>
@@ -64,17 +64,17 @@
         </tr>
         <tr>
           <td class="item-col">贴图细节与复杂性</td>
-          <td>检查是否有大面积无细节纯色的色块出现</td>
+          <td>拾取所有像素 HSV（0-255），将饱和度和明度各按 5 为一档分 bin，各以 20 个 bin 为标准，每少一个 bin 扣 0.5 分</td>
           <td class="score-col">10</td>
         </tr>
         <tr>
           <td class="item-col">贴图色彩</td>
-          <td>评估材质颜色的分布是否自然以及饱和度是否合理</td>
+          <td>HSV（0-255）检测明度 &lt; 2 或 &gt; 253 的像素，每占总像素 1% 扣 0.5 分</td>
           <td class="score-col">10</td>
         </tr>
         <tr>
           <td class="item-col">一致性与伪影</td>
-          <td>查材质纹理在不同光照或视角下的一致性</td>
+          <td>以模型空间竖向中心线为对称轴，通过 UV 坐标采样左右对称位置的贴图颜色，比较 HSV 三通道差异，偏差 &gt; 20 的部分每超 1 扣 0.1 分</td>
           <td class="score-col">10</td>
         </tr>
         <tr>
