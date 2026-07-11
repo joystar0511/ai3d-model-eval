@@ -485,6 +485,7 @@ class ModelViewer {
     let totalFaces = 0;
     let totalEdges = 0;
     const positions = [];
+    const uvs = []; // Parallel to positions, for UV-based texture symmetry analysis
     const edgeLengths = [];
     const faceNormals = [];
     let hasUV = false;
@@ -500,10 +501,20 @@ class ModelViewer {
 
       const worldMatrix = mesh.matrixWorld;
       const posLimit = Math.min(posAttr.count, 50000);
+      const uvAttr = geo.attributes.uv;
+      if (uvAttr) hasUV = true;
+
       for (let i = 0; i < posLimit; i++) {
         const v = new THREE.Vector3().fromBufferAttribute(posAttr, i);
         v.applyMatrix4(worldMatrix);
         positions.push(v);
+
+        // Collect UV parallel to position (for texture symmetry analysis)
+        if (uvAttr && i < uvAttr.count) {
+          uvs.push({ u: uvAttr.getX(i), v: uvAttr.getY(i) });
+        } else {
+          uvs.push(null);
+        }
       }
 
       const faceLimit = 50000;
@@ -549,7 +560,8 @@ class ModelViewer {
 
     totalEdges = edgeLengths.length;
 
-    const overlappingPairs = this._findOverlappingVertices(positions, 0.01);
+    // Overlapping vertices threshold: 0.0001cm = 0.000001m
+    const overlappingPairs = this._findOverlappingVertices(positions, 0.000001);
     const hiddenFaces = this._findHiddenFaces(faceNormals);
 
     const avgEdgeLength = edgeLengths.reduce((a, b) => a + b, 0) / Math.max(edgeLengths.length, 1);
@@ -560,6 +572,7 @@ class ModelViewer {
       totalFaces,
       totalEdges,
       positions,
+      uvs,
       edgeLengths,
       faceNormals,
       overlappingPairs,
