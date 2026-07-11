@@ -638,9 +638,34 @@ class App {
     btn.innerHTML = '<span>上传中...</span>';
 
     try {
-      const thumbnail = model.viewer.captureThumbnail();
-      const geoData = model.viewer.getGeometryData();
+      // Capture thumbnail with color texture if available
+      const previousMode = model.viewer.mode || 'gray';
       const texInfo = model.viewer.getTextureInfo();
+      if (texInfo.hasColorMap) {
+        model.viewer.setMode('color');
+        // Wait a frame for the texture to render
+        await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+      }
+      const thumbnail = model.viewer.captureThumbnail();
+      // Restore original mode
+      model.viewer.setMode(previousMode);
+
+      const geoData = model.viewer.getGeometryData();
+
+      // Convert model file to base64 for download
+      const modelFileData = await this._fileToBase64(model.file);
+
+      // Convert texture files to base64
+      const textureFilesData = {};
+      for (const [key, file] of Object.entries(model.textureFiles)) {
+        if (file) {
+          textureFilesData[key] = {
+            name: file.name,
+            type: file.type,
+            data: await this._fileToBase64(file),
+          };
+        }
+      }
 
       const modelData = {
         name: model.name,
@@ -654,9 +679,12 @@ class App {
           textureCount: [texInfo.hasColorMap, texInfo.hasNormalMap, texInfo.hasMetalnessMap, texInfo.hasRoughnessMap, texInfo.hasEmissionMap].filter(Boolean).length,
           fileName: model.file.name,
           fileSize: model.file.size,
+          fileType: model.file.type,
           isCharacterModel: model.evaluation?.isCharacterModel || false,
           similarity: model.evaluation?.similarity || 0,
         },
+        modelFile: modelFileData,
+        textureFiles: textureFilesData,
       };
 
       await CloudStorage.shareModel(modelData);
@@ -677,6 +705,15 @@ class App {
       btn.innerHTML = '<span>Share to Cloud</span>';
       this._showToast('分享失败，请重试', 'error');
     }
+  }
+
+  _fileToBase64(file) {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
   }
 
   // === Model Library ===
