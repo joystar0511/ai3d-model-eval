@@ -154,6 +154,19 @@ class App {
       btn.classList.toggle('active', btn.dataset.mode === mode);
     });
 
+    // Check for UV presence when switching to texture modes
+    if (mode === 'color' || mode === 'material') {
+      let noUVCount = 0;
+      for (const model of this.models) {
+        if (model.viewer && !model.viewer.hasUV()) {
+          noUVCount++;
+        }
+      }
+      if (noUVCount > 0) {
+        this._showToast(`⚠ ${noUVCount} 个模型无UV坐标，贴图可能显示异常`, 'warn');
+      }
+    }
+
     // Apply to all user models
     for (const model of this.models) {
       if (model.viewer) {
