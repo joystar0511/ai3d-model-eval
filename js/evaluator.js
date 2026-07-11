@@ -4,21 +4,18 @@
  * Scoring criteria (11 dimensions, normalized to 100):
  * 1. 隐藏面 (Hidden Faces) - 10
  * 2. 破面 (Broken Faces) - 10
- * 3. 重合点 (Overlapping Vertices) - 10
+ * 3. 重合点 (Overlapping Vertices) - 10 (threshold: 0.0001cm)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
- *    → Uses standard human model comparison:
- *    → Similarity > 50% → character model → joint wiring analysis
- *    → Similarity < 50% → non-character → no deduction
  * 6. UV利用度 (UV Utilization) - 20
- * 7. 贴图细节与复杂性 (Texture Detail) - 10
- * 8. 贴图色彩 (Texture Color) - 10
- * 9. 一致性与伪影 (Consistency & Artifacts) - 10
+ * 7. 贴图细节与复杂性 (Texture Detail) - 10 (HSV bin analysis)
+ * 8. 贴图色彩 (Texture Color) - 10 (brightness < 2 or > 253)
+ * 9. 一致性与伪影 (Consistency & Artifacts) - 10 (model-space UV symmetry)
  * 10. 材质合理性 (Material Rationality) - 10
  * 11. 法线贴图质量 (Normal Map Quality) - 10
  *
- * NOTE: Internal deduction logic is NOT exposed to users.
- * Only final scores and qualitative analysis are shown.
+ * All scores retain 2 decimal places.
+ * Internal deduction logic is NOT exposed to users.
  */
 
 const RAW_MAX = {
@@ -51,29 +48,26 @@ const DIMENSIONS = [
   { key: 'normalMapQuality',   name: '法线贴图质量',     max: 10 },
 ];
 
+/** Round to 2 decimal places */
+function r2(x) {
+  return Math.round(x * 100) / 100;
+}
+
 class ModelEvaluator {
 
   /**
    * Evaluate a model with optional standard human model reference.
-   * @param {Object} geometryData - Model geometry data
-   * @param {Object} textureInfo - Texture info
-   * @param {Object|null} standardModelRef - { fingerprint, ringLineData } of standard human model
-   * @param {Object|null} userModelFingerprint - Shape fingerprint of the user model
-   * @param {Object|null} userModelRingLineData - Ring line data of the user model
-   * @param {Function} onProgress - Progress callback
    */
   static async evaluate(geometryData, textureInfo, standardModelRef, userModelFingerprint, userModelRingLineData, onProgress) {
     const steps = DIMENSIONS.length;
     const rawScores = {};
 
-    // Compute similarity with standard human model (for riggability evaluation)
+    // Compute similarity with standard human model
     let similarity = 0;
     let isCharacterModel = false;
     if (standardModelRef && standardModelRef.fingerprint && userModelFingerprint) {
-      // We need to compute similarity - but viewer.js has the method,
-      // so we compute it here using the fingerprint data directly
       similarity = this._computeSimilarityFromFingerprints(userModelFingerprint, standardModelRef.fingerprint);
-      isCharacterModel = similarity > 0.5; // > 50% threshold per scoring criteria
+      isCharacterModel = similarity > 0.5;
     }
 
     for (let i = 0; i < DIMENSIONS.length; i++) {
@@ -86,16 +80,21 @@ class ModelEvaluator {
       if (onProgress) onProgress(Math.round(((i + 1) / steps) * 100));
     }
 
-    const rawTotal = Object.values(rawScores).reduce((a, b) => a + b, 0);
-    const normalizedTotal = Math.round((rawTotal / RAW_TOTAL) * 100);
+    // Format all raw scores to 2 decimal places
+    for (const key in rawScores) {
+      rawScores[key] = r2(rawScores[key]);
+    }
+
+    const rawTotal = r2(Object.values(rawScores).reduce((a, b) => a + b, 0));
+    const normalizedTotal = r2((rawTotal / RAW_TOTAL) * 100);
     const analysis = this._generateAnalysis(rawScores, geometryData, textureInfo, isCharacterModel, similarity);
 
     const breakdown = DIMENSIONS.map(dim => ({
       name: dim.name,
       key: dim.key,
-      score: rawScores[dim.key],
+      score: r2(rawScores[dim.key]),
       max: dim.max,
-      percentage: Math.round((rawScores[dim.key] / dim.max) * 100),
+      percentage: r2((rawScores[dim.key] / dim.max) * 100),
     }));
 
     let grade, gradeClass;
@@ -113,12 +112,12 @@ class ModelEvaluator {
       breakdown,
       analysis,
       isCharacterModel,
-      similarity: Math.round(similarity * 100),
+      similarity: r2(similarity * 100),
     };
   }
 
   static _evaluateDimension(key, geo, tex, isCharacterModel, ringLineData, similarity) {
-    if (!geo) return Math.floor(RAW_MAX[key] * 0.5);
+    if (!geo) return RAW_MAX[key] * 0.5;
 
     switch (key) {
       case 'hiddenFaces': return this._evalHiddenFaces(geo);
@@ -142,7 +141,6 @@ class ModelEvaluator {
     const max = RAW_MAX.hiddenFaces;
     if (!geo.faceNormals || geo.faceNormals.length === 0) return max * 0.6;
     const hiddenRatio = geo.hiddenFaces / Math.max(geo.faceNormals.length, 1);
-    // 每占总面数1%扣0.1分，扣到0为止
     const penalty = Math.min(hiddenRatio * 100 * 0.1, max);
     return Math.max(max - penalty, 0);
   }
@@ -155,13 +153,10 @@ class ModelEvaluator {
         const a = geo.edgeLengths[i] || 0;
         const b = geo.edgeLengths[i + 1] || 0;
         const c = geo.edgeLengths[i + 2] || 0;
-        // Degenerate triangle (zero-length edge)
         if (a < 1e-6 || b < 1e-6 || c < 1e-6) broken++;
-        // Impossible triangle (sum of two sides < third side)
         if (a + b < c * 0.999 || a + c < b * 0.999 || b + c < a * 0.999) broken++;
       }
     }
-    // 有一个破面扣1分
     const penalty = Math.min(broken, max);
     return Math.max(max - penalty, 0);
   }
@@ -180,8 +175,6 @@ class ModelEvaluator {
     const avg = geo.avgEdgeLength;
     if (avg < 1e-8) return 0;
 
-    // 类型1: > 平均值130% 的边
-    // 类型2: < 平均值 的边
     let type1 = 0, type2 = 0;
     for (const len of geo.edgeLengths) {
       if (len > avg * 1.3) type1++;
@@ -190,53 +183,38 @@ class ModelEvaluator {
 
     const total = geo.edgeLengths.length;
     const typeRatio = (type1 + type2) / Math.max(total, 1);
-    // 类型1和2每超过所有边数量的50%扣0.5分
     const penalty = Math.min(Math.floor(typeRatio / 0.5) * 0.5, max);
     return Math.max(max - penalty, 0);
   }
 
   /**
-   * Evaluate rig-ability (可绑定程度) per the scoring criteria:
-   *
-   * 1. Compare with standard human model → compute similarity
-   * 2. If similarity > 50% → classify as character model
-   * 3. For character models:
-   *    - Read ring line circumferences, compute average
-   *    - Rings < 50% of average = joint wiring (关节布线)
-   *    - Joint wiring ratio 30%-70% → no deduction
-   *    - > 70%: each 1% above = -1 point
-   *    - < 30%: each 1% below = -1 point
-   * 4. For non-character models → no deduction (full score)
+   * Evaluate rig-ability per scoring criteria:
+   * - similarity > 50% → character model → joint wiring analysis
+   * - non-character → no deduction (full score)
    */
   static _evalRiggability(geo, isCharacterModel, ringLineData) {
     const max = RAW_MAX.riggability;
 
-    // If NOT a character model → no deduction, full score
     if (!isCharacterModel) {
       return max;
     }
 
-    // For character models, analyze joint wiring
     if (!ringLineData || !ringLineData.circumferences || ringLineData.circumferences.length < 5) {
-      // Can't analyze ring lines → give partial score
-      return Math.round(max * 0.7);
+      return max * 0.7;
     }
 
-    const jointRatio = ringLineData.jointRatio; // ratio of joint rings to total rings
+    const jointRatio = ringLineData.jointRatio;
 
-    // Joint wiring ratio in 30%-70% range → no deduction
     if (jointRatio >= 0.3 && jointRatio <= 0.7) {
       return max;
     }
 
-    // Below 30%: each 1% below → -1 point
     if (jointRatio < 0.3) {
       const belowPercent = (0.3 - jointRatio) * 100;
       const penalty = Math.min(Math.round(belowPercent), max);
       return Math.max(max - penalty, 0);
     }
 
-    // Above 70%: each 1% above → -1 point
     if (jointRatio > 0.7) {
       const abovePercent = (jointRatio - 0.7) * 100;
       const penalty = Math.min(Math.round(abovePercent), max);
@@ -255,156 +233,233 @@ class ModelEvaluator {
     else if (vc > 2000) simulatedRatio = 0.65 + Math.random() * 0.25;
     else simulatedRatio = 0.50 + Math.random() * 0.30;
 
-    // 占比>80%不扣分
     if (simulatedRatio > 0.8) return max;
-    // 60%-80%区间内每少1%扣1分
     if (simulatedRatio > 0.6) {
       const penalty = (0.8 - simulatedRatio) * 100;
       return Math.max(max - penalty, 0);
     }
-    // 少于60%此项0分
     return 0;
   }
 
-  // === Texture evaluators ===
+  // === Texture evaluators (REWRITTEN per user spec) ===
 
+  /**
+   * 贴图细节与复杂性 (Texture Detail & Complexity)
+   *
+   * New logic:
+   * - Pick all pixels' HSV (0-255)
+   * - Bin saturation into bins of 5 → count non-empty bins
+   * - Bin value/brightness into bins of 5 → count non-empty bins
+   * - Standard = 20 bins for each
+   * - Each missing bin → -0.5
+   * - Score = max(0, 10 - penalty)
+   */
   static _evalTextureDetail(tex) {
     const max = RAW_MAX.textureDetail;
     if (!tex || !tex.hasColorMap) return max * 0.4;
 
     const imgData = tex.imageData?.baseColor;
-    if (!imgData) return Math.round(max * 0.7);
+    if (!imgData) return max * 0.7;
 
     const { data, width, height } = imgData;
     const totalPixels = width * height;
-    let flatAreaPixels = 0;
-    const blockSize = 4;
 
-    for (let by = 0; by < height - blockSize; by += blockSize) {
-      for (let bx = 0; bx < width - blockSize; bx += blockSize) {
-        let rSum = 0, gSum = 0, bSum = 0;
-        const blockPixels = blockSize * blockSize;
-        for (let dy = 0; dy < blockSize; dy++) {
-          for (let dx = 0; dx < blockSize; dx++) {
-            const idx = ((by + dy) * width + (bx + dx)) * 4;
-            rSum += data[idx];
-            gSum += data[idx + 1];
-            bSum += data[idx + 2];
-          }
-        }
-        const rAvg = rSum / blockPixels;
-        const gAvg = gSum / blockPixels;
-        const bAvg = bSum / blockPixels;
+    // Create saturation bins and value bins (0-255, bin size = 5 → 51 bins)
+    const satBins = new Set();
+    const valBins = new Set();
 
-        let variance = 0;
-        for (let dy = 0; dy < blockSize; dy++) {
-          for (let dx = 0; dx < blockSize; dx++) {
-            const idx = ((by + dy) * width + (bx + dx)) * 4;
-            variance += Math.abs(data[idx] - rAvg);
-            variance += Math.abs(data[idx + 1] - gAvg);
-            variance += Math.abs(data[idx + 2] - bAvg);
-          }
-        }
-        variance /= (blockPixels * 3);
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+      const [h, s, v] = this._rgbToHsv255(r, g, b);
 
-        // 连续像素色相饱和度明度无变化 → 细节缺失
-        if (variance < 2) {
-          flatAreaPixels += blockPixels;
-        }
-      }
+      const satBin = Math.floor(s / 5);
+      const valBin = Math.floor(v / 5);
+      satBins.add(satBin);
+      valBins.add(valBin);
     }
 
-    const flatRatio = flatAreaPixels / totalPixels;
-    // 每占贴图总大小1%扣1分
-    const penalty = Math.min(flatRatio * 100, max);
+    const satCount = satBins.size;
+    const valCount = valBins.size;
+
+    // Standard is 20, each missing → -0.5
+    const satMissing = Math.max(0, 20 - satCount);
+    const valMissing = Math.max(0, 20 - valCount);
+    const penalty = (satMissing + valMissing) * 0.5;
+
     return Math.max(max - penalty, 0);
   }
 
+  /**
+   * 贴图色彩 (Texture Color)
+   *
+   * New logic:
+   * - HSV (0-255) standard
+   * - Check if any pixels have brightness (V) < 2 or > 253
+   * - Each 1% of total pixels with such brightness → -0.5
+   * - Score = max(0, 10 - penalty)
+   */
   static _evalTextureColor(tex) {
     const max = RAW_MAX.textureColor;
     if (!tex || !tex.hasColorMap) return max * 0.4;
 
     const imgData = tex.imageData?.baseColor;
-    if (!imgData) return Math.round(max * 0.7);
+    if (!imgData) return max * 0.7;
 
-    const { data, width, height } = imgData;
-    const totalPixels = width * height;
+    const { data } = imgData;
+    const totalPixels = data.length / 4;
     let badPixels = 0;
 
     for (let i = 0; i < data.length; i += 4) {
       const r = data[i];
       const g = data[i + 1];
       const b = data[i + 2];
-      const [h, s, v] = this._rgbToHsv(r, g, b);
+      const [h, s, v] = this._rgbToHsv255(r, g, b);
 
-      // HSV(0-255): 明度<10或>245, 饱和度<10 → 问题像素
-      if (v < 10 || v > 245 || s < 10) {
+      // Brightness < 2 or > 253
+      if (v < 2 || v > 253) {
         badPixels++;
       }
     }
 
-    const badRatio = badPixels / totalPixels;
-    // 每占贴图总像素1%扣1分
-    const penalty = Math.min(badRatio * 100, max);
+    const badPercent = (badPixels / totalPixels) * 100;
+    // Each 1% → -0.5
+    const penalty = badPercent * 0.5;
+
     return Math.max(max - penalty, 0);
   }
 
+  /**
+   * 一致性与伪影 (Consistency & Artifacts)
+   *
+   * New logic:
+   * - Use model-space vertical centerline as symmetry axis
+   * - For each left-side vertex, find mirror vertex on right side
+   * - Sample texture at both UV positions
+   * - Compare H, S, V (all 0-255) differences
+   * - Diff <= 20: normal (no penalty)
+   * - Diff > 20: each point above 20 → -0.1
+   * - Score = max(0, 10 - total penalty)
+   */
   static _evalConsistency(geo, tex) {
     const max = RAW_MAX.consistency;
 
-    // Check geometric symmetry (left-right along center axis)
-    let symmetryScore = 0.7;
-    if (geo.positions && geo.positions.length > 0) {
-      const sampleSize = Math.min(100, geo.positions.length);
-      let symmetric = 0;
-      for (let i = 0; i < sampleSize; i++) {
-        const p = geo.positions[i];
-        for (let j = 0; j < sampleSize; j++) {
-          if (i === j) continue;
-          const q = geo.positions[j];
-          if (Math.abs(p.x + q.x) < 0.001 && Math.abs(p.y - q.y) < 0.001 && Math.abs(p.z - q.z) < 0.001) {
-            symmetric++;
-            break;
+    // Need both UV data and base color texture
+    if (!geo?.uvs || !tex?.imageData?.baseColor) {
+      return max * 0.4;
+    }
+
+    const { positions, uvs } = geo;
+    const imgData = tex.imageData.baseColor;
+    const { data, width, height } = imgData;
+
+    // Find center X (model is centered at origin, but compute actual center)
+    let minX = Infinity, maxX = -Infinity;
+    for (const p of positions) {
+      if (p.x < minX) minX = p.x;
+      if (p.x > maxX) maxX = p.x;
+    }
+    const centerX = (minX + maxX) / 2;
+
+    // Build spatial hash of right-side vertices (x > centerX)
+    const cellSize = 0.05;
+    const grid = new Map();
+
+    const leftIndices = [];
+    for (let i = 0; i < positions.length; i++) {
+      if (!uvs[i]) continue;
+      if (positions[i].x > centerX) {
+        const p = positions[i];
+        const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)},${Math.floor(p.z / cellSize)}`;
+        if (!grid.has(key)) grid.set(key, []);
+        grid.get(key).push(i);
+      } else if (positions[i].x < centerX) {
+        leftIndices.push(i);
+      }
+    }
+
+    if (leftIndices.length === 0 || grid.size === 0) return max * 0.5;
+
+    // Sample up to 50 left-side vertices
+    const maxPairs = 50;
+    const sampleStep = Math.max(1, Math.floor(leftIndices.length / maxPairs));
+
+    let totalPenalty = 0;
+    let pairCount = 0;
+
+    for (let si = 0; si < leftIndices.length && pairCount < maxPairs; si += sampleStep) {
+      const leftIdx = leftIndices[si];
+      const lp = positions[leftIdx];
+
+      // Mirrored position
+      const mx = 2 * centerX - lp.x;
+      const my = lp.y;
+      const mz = lp.z;
+
+      // Find nearest right vertex using grid search
+      let nearestIdx = -1;
+      let nearestDist = Infinity;
+
+      const gx = Math.floor(mx / cellSize);
+      const gy = Math.floor(my / cellSize);
+      const gz = Math.floor(mz / cellSize);
+
+      for (let dx = -2; dx <= 2; dx++) {
+        for (let dy = -2; dy <= 2; dy++) {
+          for (let dz = -2; dz <= 2; dz++) {
+            const key = `${gx + dx},${gy + dy},${gz + dz}`;
+            const cell = grid.get(key);
+            if (cell) {
+              for (const idx of cell) {
+                const rp = positions[idx];
+                const dist = Math.sqrt(
+                  (rp.x - mx) ** 2 + (rp.y - my) ** 2 + (rp.z - mz) ** 2
+                );
+                if (dist < nearestDist) {
+                  nearestDist = dist;
+                  nearestIdx = idx;
+                }
+              }
+            }
           }
         }
       }
-      symmetryScore = symmetric / sampleSize;
+
+      if (nearestIdx === -1 || nearestDist > 0.1) continue;
+
+      // Get UVs for both vertices
+      const leftUV = uvs[leftIdx];
+      const rightUV = uvs[nearestIdx];
+
+      // Sample texture at both UV positions
+      const leftColor = this._sampleTexture(imgData, leftUV.u, leftUV.v);
+      const rightColor = this._sampleTexture(imgData, rightUV.u, rightUV.v);
+
+      if (!leftColor || !rightColor) continue;
+
+      // Convert to HSV (0-255)
+      const [lh, ls, lv] = this._rgbToHsv255(leftColor.r, leftColor.g, leftColor.b);
+      const [rh, rs, rv] = this._rgbToHsv255(rightColor.r, rightColor.g, rightColor.b);
+
+      // Compute differences (hue wrapping)
+      const hDiff = this._hueDiff255(lh, rh);
+      const sDiff = Math.abs(ls - rs);
+      const vDiff = Math.abs(lv - rv);
+
+      // Each component: diff > 20 → (diff - 20) * 0.1 penalty
+      if (hDiff > 20) totalPenalty += (hDiff - 20) * 0.1;
+      if (sDiff > 20) totalPenalty += (sDiff - 20) * 0.1;
+      if (vDiff > 20) totalPenalty += (vDiff - 20) * 0.1;
+
+      pairCount++;
     }
 
-    // Check texture color symmetry (left-right halves)
-    let texSymmetry = 1.0;
-    const imgData = tex?.imageData?.baseColor;
-    if (imgData) {
-      const { data, width, height } = imgData;
-      let diffSum = 0;
-      let count = 0;
-      const halfW = Math.floor(width / 2);
-      const sampleStep = Math.max(1, Math.floor(height / 50));
+    if (pairCount === 0) return max * 0.5;
 
-      for (let y = 0; y < height; y += sampleStep) {
-        for (let x = 0; x < halfW; x += 2) {
-          const leftIdx = (y * width + x) * 4;
-          const rightIdx = (y * width + (width - 1 - x)) * 4;
-          const dr = Math.abs(data[leftIdx] - data[rightIdx]);
-          const dg = Math.abs(data[leftIdx + 1] - data[rightIdx + 1]);
-          const db = Math.abs(data[leftIdx + 2] - data[rightIdx + 2]);
-          const diff = (dr + dg + db) / 3;
-          diffSum += diff;
-          count++;
-        }
-      }
-
-      if (count > 0) {
-        const avgDiff = diffSum / count;
-        // 偏差5以内正常，偏差5以上每偏差1扣0.1分
-        if (avgDiff > 5) {
-          texSymmetry = Math.max(0, 1 - (avgDiff - 5) * 0.1);
-        }
-      }
-    }
-
-    const combinedScore = (symmetryScore * 0.5 + texSymmetry * 0.5);
-    return Math.round(max * Math.min(combinedScore + 0.2, 1));
+    // Average penalty per pair to normalize
+    const avgPenalty = totalPenalty / pairCount;
+    return Math.max(max - avgPenalty, 0);
   }
 
   static _evalMaterialRationality(tex) {
@@ -425,12 +480,10 @@ class ModelEvaluator {
         pixelCount++;
       }
       const avgBrightness = brightSum / pixelCount;
-      // 金属度贴图平均明度应在155以上
       if (avgBrightness >= 155) {
         score += max * 0.3;
       } else {
         const deviation = Math.abs(avgBrightness - 155);
-        // 每和标准值相差5扣一分
         const penalty = Math.min(Math.round(deviation / 5), max * 0.2);
         score += max * 0.3 - penalty;
       }
@@ -445,7 +498,6 @@ class ModelEvaluator {
         pixelCount++;
       }
       const avgBrightness = brightSum / pixelCount;
-      // 粗糙度贴图平均明度应在100以下
       if (avgBrightness <= 100) {
         score += max * 0.3;
       } else {
@@ -455,7 +507,7 @@ class ModelEvaluator {
       }
     }
 
-    return Math.min(Math.round(score), max);
+    return Math.min(score, max);
   }
 
   static _evalNormalMapQuality(tex) {
@@ -465,12 +517,11 @@ class ModelEvaluator {
     const normalData = tex.imageData?.normalMap;
     const colorData = tex.imageData?.baseColor;
 
-    if (!normalData) return Math.round(max * 0.7);
+    if (!normalData) return max * 0.7;
 
     let score = max * 0.6;
 
-    // Check normal map has proper blue-ish tint (tangent space)
-    const { data, width, height } = normalData;
+    const { data } = normalData;
     let bSum = 0, pixelCount = 0;
     for (let i = 0; i < data.length; i += 4) {
       bSum += data[i + 2];
@@ -484,7 +535,6 @@ class ModelEvaluator {
       score += max * 0.1;
     }
 
-    // Check correspondence: bright color → convex normal, dark color → concave normal
     if (colorData && colorData.width === normalData.width) {
       let correspondCount = 0;
       let checkedPixels = 0;
@@ -494,7 +544,6 @@ class ModelEvaluator {
       for (let i = 0; i < Math.min(colorData.data.length, normalData.data.length); i += 4 * step) {
         const colorBrightness = (colorData.data[i] + colorData.data[i + 1] + colorData.data[i + 2]) / 3;
         const normalB = normalData.data[i + 2];
-        // 亮→凸(高蓝通道), 暗→凹(低蓝通道)
         if ((colorBrightness > 128 && normalB > 128) || (colorBrightness <= 128 && normalB <= 128)) {
           correspondCount++;
         }
@@ -511,27 +560,69 @@ class ModelEvaluator {
       }
     }
 
-    return Math.min(Math.round(score), max);
+    return Math.min(score, max);
+  }
+
+  // === Texture sampling & HSV utilities ===
+
+  /**
+   * Sample texture color at UV coordinates.
+   * texture.flipY = false in viewer, so UV (0,0) → top-left of image data.
+   */
+  static _sampleTexture(imgData, u, v) {
+    if (!imgData) return null;
+    const { data, width, height } = imgData;
+    // Clamp UV to [0, 1)
+    u = Math.max(0, Math.min(0.9999, u));
+    v = Math.max(0, Math.min(0.9999, v));
+    const px = Math.min(Math.floor(u * width), width - 1);
+    const py = Math.min(Math.floor(v * height), height - 1);
+    const idx = (py * width + px) * 4;
+    return { r: data[idx], g: data[idx + 1], b: data[idx + 2] };
+  }
+
+  /**
+   * Convert RGB to HSV, all components in 0-255 range.
+   */
+  static _rgbToHsv255(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    let h = 0;
+    if (d !== 0) {
+      if (max === r) h = ((g - b) / d) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60;
+      if (h < 0) h += 360;
+    }
+    h = (h / 360) * 255; // Convert hue to 0-255
+    const s = max === 0 ? 0 : (d / max) * 255;
+    const v = max * 255;
+    return [h, s, v];
+  }
+
+  /**
+   * Compute hue difference with wrapping (0-255 range).
+   */
+  static _hueDiff255(h1, h2) {
+    const diff = Math.abs(h1 - h2);
+    return Math.min(diff, 255 - diff);
   }
 
   // === Similarity computation ===
 
-  /**
-   * Compute similarity between two shape fingerprints.
-   * Uses the same algorithm as ModelViewer.computeSimilarity.
-   */
   static _computeSimilarityFromFingerprints(fpA, fpB) {
     if (!fpA || !fpB) return 0;
 
     let score = 0;
 
-    // 1. Bounding box proportions (30%)
     const widthDiff = Math.abs(fpA.widthRatio - fpB.widthRatio);
     const depthDiff = Math.abs(fpA.depthRatio - fpB.depthRatio);
     const proportionScore = Math.max(0, 1 - (widthDiff + depthDiff) * 0.5);
     score += proportionScore * 0.30;
 
-    // 2. Vertex density distribution (40%)
     const thisDensity = fpA.densityPct;
     const stdDensity = fpB.densityPct;
     let densityDiff = 0;
@@ -541,7 +632,6 @@ class ModelEvaluator {
     const densityScore = Math.max(0, 1 - densityDiff * 2);
     score += densityScore * 0.40;
 
-    // 3. Cross-section silhouette (30%)
     const thisWidth = fpA.crossWidth;
     const stdWidth = fpB.crossWidth;
     const thisDepth = fpA.crossDepth;
@@ -557,26 +647,6 @@ class ModelEvaluator {
     return score;
   }
 
-  // === Utility ===
-
-  static _rgbToHsv(r, g, b) {
-    r /= 255; g /= 255; b /= 255;
-    const max = Math.max(r, g, b);
-    const min = Math.min(r, g, b);
-    const d = max - min;
-    let h = 0;
-    if (d !== 0) {
-      if (max === r) h = ((g - b) / d) % 6;
-      else if (max === g) h = (b - r) / d + 2;
-      else h = (r - g) / d + 4;
-      h *= 60;
-      if (h < 0) h += 360;
-    }
-    const s = max === 0 ? 0 : (d / max) * 255;
-    const v = max * 255;
-    return [h, s, v];
-  }
-
   // === Analysis generation ===
 
   static _generateAnalysis(scores, geo, tex, isCharacterModel, similarity) {
@@ -589,16 +659,15 @@ class ModelEvaluator {
       tex?.hasRoughnessMap, tex?.hasEmissionMap
     ].filter(Boolean).length;
 
-    // Model type identification
     if (isCharacterModel) {
       analyses.push({
         title: '模型类型识别',
-        content: `通过与标准人体模型对比分析，该模型与标准人体模型的相似度为 ${Math.round(similarity * 100)}%，已被识别为人物角色模型。将进行关节布线专项评估。`,
+        content: `通过与标准人体模型对比分析，该模型与标准人体模型的相似度为 ${r2(similarity * 100)}%，已被识别为人物角色模型。将进行关节布线专项评估。`,
       });
     } else if (similarity > 0) {
       analyses.push({
         title: '模型类型识别',
-        content: `该模型与标准人体模型的相似度为 ${Math.round(similarity * 100)}%，未被归类为人物角色模型，可绑定程度项不予扣分。`,
+        content: `该模型与标准人体模型的相似度为 ${r2(similarity * 100)}%，未被归类为人物角色模型，可绑定程度项不予扣分。`,
       });
     }
 
@@ -616,7 +685,6 @@ class ModelEvaluator {
       analyses.push({ title: '拓扑结构', content: '模型拓扑存在较多问题，布线不够均匀，建议重新进行拓扑优化。' });
     }
 
-    // Joint wiring analysis for character models
     if (isCharacterModel && scores.riggability < RAW_MAX.riggability) {
       analyses.push({
         title: '关节布线分析',
@@ -688,7 +756,6 @@ class ModelEvaluator {
     const winnerStrengths = dimensionComparison.filter(d => d.winner > d.runner).map(d => d.name);
     const runnerStrengths = dimensionComparison.filter(d => d.runner > d.winner).map(d => d.name);
 
-    // Model type info
     const winnerIsChar = winner.result.isCharacterModel;
     const runnerIsChar = runner.result.isCharacterModel;
 
@@ -704,7 +771,7 @@ class ModelEvaluator {
     return {
       winner,
       runner,
-      scoreDiff: winner.result.totalScore - runner.result.totalScore,
+      scoreDiff: r2(winner.result.totalScore - runner.result.totalScore),
       dimensionComparison,
       winnerStrengths,
       runnerStrengths,
@@ -715,8 +782,8 @@ class ModelEvaluator {
   }
 
   static _generatePKSummary(winner, runner, dims, typeComparison) {
-    const diff = winner.result.totalScore - runner.result.totalScore;
-    let summary = `"${winner.name}" 以 ${winner.result.totalScore} 分领先 "${runner.name}" (${runner.result.totalScore} 分)，差距 ${diff} 分。`;
+    const diff = r2(winner.result.totalScore - runner.result.totalScore);
+    let summary = `"${winner.name}" 以 ${winner.result.totalScore.toFixed(2)} 分领先 "${runner.name}" (${runner.result.totalScore.toFixed(2)} 分)，差距 ${diff.toFixed(2)} 分。`;
 
     if (typeComparison) {
       summary += typeComparison;
