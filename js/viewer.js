@@ -182,7 +182,15 @@ class ModelViewer {
 
     const totalVerts = this.geometryData.totalVertices;
     const totalFaces = this.geometryData.totalFaces;
-    this.infoDiv.textContent = `顶点: ${totalVerts.toLocaleString()} | 面: ${totalFaces.toLocaleString()}`;
+    const hasUV = this.geometryData.hasUV;
+    this.infoDiv.textContent = `顶点: ${totalVerts.toLocaleString()} | 面: ${totalFaces.toLocaleString()}${hasUV ? '' : ' | ⚠ 无UV'}`;
+
+    // If no UV, warn when user tries to use texture modes
+    if (!hasUV) {
+      this._noUV = true;
+    } else {
+      this._noUV = false;
+    }
   }
 
   /**
@@ -436,7 +444,11 @@ class ModelViewer {
         } else {
           texture.colorSpace = THREE.NoColorSpace;
         }
-        texture.flipY = false;
+        // flipY defaults to true in Three.js — this is correct for UV mapping
+        // Do NOT set flipY = false, it breaks UV mapping
+        texture.wrapS = THREE.RepeatWrapping;
+        texture.wrapT = THREE.RepeatWrapping;
+        texture.needsUpdate = true;
 
         this.textures[key] = texture;
         this._extractImageData(key, file);
@@ -626,6 +638,11 @@ class ModelViewer {
     this.mode = mode;
     if (!this.mesh) return;
 
+    // Warn if texture mode requested but model has no UV
+    if (this._noUV && (mode === 'color' || mode === 'material')) {
+      console.warn('Model has no UV coordinates — texture will not map correctly');
+    }
+
     this.mesh.traverse(child => {
       if (!child.isMesh) return;
 
@@ -741,6 +758,10 @@ class ModelViewer {
 
   hasTextures() {
     return !!this.textures.baseColor;
+  }
+
+  hasUV() {
+    return this.geometryData ? this.geometryData.hasUV : false;
   }
 
   getTextureInfo() {
