@@ -596,11 +596,9 @@ class App {
         tags.push({ label: '角色模型', color: 'gold', detail: `相似度 ${ev.similarity.toFixed(1)}%` });
       }
 
-      // Score-based tag
+      // Score-based tag (high quality only)
       if (ev.totalScore >= 80) {
         tags.push({ label: '高质量', color: 'blue', detail: `${ev.totalScore.toFixed(1)}分` });
-      } else if (ev.totalScore < 60) {
-        tags.push({ label: '需优化', color: 'red', detail: `${ev.totalScore.toFixed(1)}分` });
       }
 
       recTagsHTML = tags.map(t => `
