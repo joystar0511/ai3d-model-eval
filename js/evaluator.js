@@ -189,6 +189,7 @@ class ModelEvaluator {
 
     // No data or no close pairs → full score
     if (!avg || avg < 1e-10 || !distances || distances.length === 0) {
+      console.log('[重合点] 无近距点对，满分');
       return max;
     }
 
@@ -206,8 +207,20 @@ class ModelEvaluator {
       }
     }
 
-    // Cap deduction at max (10), score never negative
-    return Math.max(max - Math.min(totalDeduction, max), 0);
+    const finalDeduction = Math.min(totalDeduction, max);
+    const score = Math.max(max - finalDeduction, 0);
+
+    console.log(`[重合点] 平均距离=${avg.toFixed(6)}, 阈值(5%)=${(avg * 0.05).toFixed(6)}, 近距点对数=${distances.length}, 总扣分=${totalDeduction.toFixed(2)}(封顶${finalDeduction.toFixed(2)}), 得分=${score.toFixed(2)}`);
+    if (distances.length <= 10) {
+      distances.forEach((d, i) => {
+        const pct = (d / avg) * 100;
+        const below = Math.floor(5 - pct);
+        const ded = 0.5 * Math.pow(2, below);
+        console.log(`  对${i}: 距离=${d.toFixed(6)} (${pct.toFixed(2)}% of avg), 扣${ded.toFixed(2)}分`);
+      });
+    }
+
+    return score;
   }
 
   static _evalWireUniformity(geo) {
