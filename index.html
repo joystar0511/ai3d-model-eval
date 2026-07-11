@@ -17,30 +17,49 @@
 </head>
 <body>
 
-  <!-- Header -->
   <header class="app-header">
     <h1>🧊 AI 3D 拓扑低模评测工具</h1>
     <nav class="header-nav">
       <a href="scoring.html" target="_blank">评分标准</a>
-      <a href="library.html" target="_blank">模型库</a>
     </nav>
   </header>
 
-  <!-- Upload Area -->
+  <div class="standard-model-section admin-only" id="standardModelSection" style="display:none;">
+    <div class="standard-model-title">
+      <span class="standard-icon">👤</span>
+      <div class="standard-title-text">
+        <span class="standard-label">标准人体模型（管理后台 · 参照基准）</span>
+        <span class="standard-desc">仅管理员可见。上传标准人体模型后，评测将参照其拓扑结构对比分析，识别人形角色模型并评估关节布线</span>
+      </div>
+    </div>
+    <div class="standard-upload-row">
+      <div class="standard-upload-zone" id="standardUploadZone">
+        <div class="standard-upload-icon">📂</div>
+        <p>点击上传标准人体模型</p>
+        <p class="standard-format-hint">OBJ, FBX, GLTF, GLB, STL, PLY</p>
+      </div>
+      <input type="file" id="standardFileInput" class="hidden-file-input"
+        accept=".obj,.fbx,.gltf,.glb,.stl,.ply" />
+      <div class="standard-preview-box" id="standardPreviewBox" style="display:none;">
+        <div class="standard-preview-header">
+          <span class="standard-preview-label">✅ 标准人体模型已加载</span>
+          <button class="standard-remove-btn" id="standardRemoveBtn">移除</button>
+        </div>
+        <div class="standard-preview-viewer" id="standardPreviewViewer"></div>
+        <div class="standard-preview-info" id="standardPreviewInfo"></div>
+      </div>
+    </div>
+  </div>
+
   <div class="upload-area" id="uploadArea">
-    <!-- Scoring criteria link -->
     <div class="scoring-link">
       想了解评测标准？ <a href="scoring.html" target="_blank">点击查看评分标准</a>
     </div>
-
-    <!-- Initial upload zone -->
     <div class="upload-zone" id="initialUpload">
       <div class="upload-icon">📁</div>
       <p><strong>点击或拖拽上传模型文件</strong></p>
       <p class="formats">支持格式：OBJ, FBX, GLTF, GLB, STL, PLY, BLEND</p>
     </div>
-
-    <!-- Split buttons (hidden initially) -->
     <div class="split-buttons" id="splitButtons" style="display:none;">
       <button class="btn btn-blue" id="btnAddMore">
         <span>📂 继续添加模型</span>
@@ -49,26 +68,48 @@
         <span>🚀 开始评测</span>
       </button>
     </div>
-
-    <!-- Model library link -->
-    <div class="scoring-link" style="margin-top:24px;">
-      <a href="library.html" target="_blank">浏览云端模型库 →</a>
-    </div>
   </div>
 
-  <!-- Hidden file inputs -->
   <input type="file" id="fileInput" class="hidden-file-input" multiple
     accept=".obj,.fbx,.gltf,.glb,.stl,.ply,.blend" />
   <input type="file" id="fileInputAdd" class="hidden-file-input" multiple
     accept=".obj,.fbx,.gltf,.glb,.stl,.ply,.blend" />
 
-  <!-- Model Grid -->
-  <div class="model-grid" id="modelGrid" style="display:none;"></div>
+  <div class="global-mode-toolbar" id="globalModeToolbar" style="display:none;">
+    <span class="global-mode-label">视图模式：</span>
+    <button class="global-mode-btn active" data-mode="gray" title="无贴图，灰色材质显示模型形状">
+      🔘 灰模显示
+    </button>
+    <button class="global-mode-btn" data-mode="wireframe" title="蓝色线框，查看拓扑布线结构">
+      🔷 线框显示
+    </button>
+    <button class="global-mode-btn" data-mode="color" title="贴上颜色贴图(BaseColor)的效果">
+      🎨 颜色贴图显示
+    </button>
+    <button class="global-mode-btn" data-mode="material" title="平行光 + 法线/金属度/粗糙度/自发光 PBR材质效果">
+      💡 材质效果显示
+    </button>
+  </div>
 
-  <!-- PK Section -->
+  <div class="model-grid" id="modelGrid" style="display:none;"></div>
   <div class="pk-section" id="pkSection"></div>
 
-  <!-- Progress Overlay -->
+  <div class="model-library-section" id="modelLibrarySection">
+    <div class="library-header">
+      <h2 class="library-title">📦 模型库</h2>
+      <button class="library-refresh-btn" id="libraryRefreshBtn" title="随机刷新展示其他模型">
+        🔄 刷新
+      </button>
+    </div>
+    <div class="library-grid" id="libraryGrid">
+      <div class="library-empty-state">
+        <span class="empty-icon">📭</span>
+        <p>模型库暂无模型</p>
+        <p class="empty-hint">评测完成后可将模型分享到此处</p>
+      </div>
+    </div>
+  </div>
+
   <div class="progress-overlay" id="progressOverlay">
     <div class="progress-box">
       <div class="spinner"></div>
@@ -80,10 +121,8 @@
     </div>
   </div>
 
-  <!-- Toast -->
   <div class="toast" id="toast"></div>
 
-  <!-- Main App Script -->
   <script type="module" src="js/app.js"></script>
 </body>
 </html>
