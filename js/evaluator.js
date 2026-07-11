@@ -365,10 +365,11 @@ class ModelEvaluator {
    */
   static _evalTextureDetail(tex) {
     const max = RAW_MAX.textureDetail;
-    if (!tex || !tex.hasColorMap) return max * 0.4;
+    // No color texture uploaded → 0 points
+    if (!tex || !tex.hasColorMap) return 0;
 
     const imgData = tex.imageData?.baseColor;
-    if (!imgData) return max * 0.7;
+    if (!imgData) return 0;
 
     const { data, width, height } = imgData;
     const totalPixels = width * height;
@@ -411,10 +412,11 @@ class ModelEvaluator {
    */
   static _evalTextureColor(tex) {
     const max = RAW_MAX.textureColor;
-    if (!tex || !tex.hasColorMap) return max * 0.4;
+    // No color texture uploaded → 0 points
+    if (!tex || !tex.hasColorMap) return 0;
 
     const imgData = tex.imageData?.baseColor;
-    if (!imgData) return max * 0.7;
+    if (!imgData) return 0;
 
     const { data } = imgData;
     const totalPixels = data.length / 4;
@@ -454,9 +456,9 @@ class ModelEvaluator {
   static _evalConsistency(geo, tex) {
     const max = RAW_MAX.consistency;
 
-    // Need both UV data and base color texture
-    if (!geo?.uvs || !tex?.imageData?.baseColor) {
-      return max * 0.4;
+    // Need both UV data and base color texture; no color texture → 0 points
+    if (!geo?.uvs || !tex?.hasColorMap || !tex?.imageData?.baseColor) {
+      return 0;
     }
 
     const { positions, uvs } = geo;
@@ -573,14 +575,17 @@ class ModelEvaluator {
 
   static _evalMaterialRationality(tex) {
     const max = RAW_MAX.materialRationality;
-    if (!tex) return max * 0.5;
 
-    let score = max * 0.4;
+    // Start from full score; deduct 5 for each missing PBR map
+    let score = max;
 
-    const metalData = tex.imageData?.metallicMap;
-    const roughData = tex.imageData?.roughness;
+    const metalData = tex?.imageData?.metallicMap;
+    const roughData = tex?.imageData?.roughness;
 
-    if (metalData) {
+    // No Metallic map → -5 points
+    if (!metalData) {
+      score -= 5;
+    } else {
       const { data } = metalData;
       let brightSum = 0;
       let pixelCount = 0;
@@ -590,15 +595,18 @@ class ModelEvaluator {
       }
       const avgBrightness = brightSum / pixelCount;
       if (avgBrightness >= 155) {
-        score += max * 0.3;
+        // Good metallic value
       } else {
         const deviation = Math.abs(avgBrightness - 155);
-        const penalty = Math.min(Math.round(deviation / 5), max * 0.2);
-        score += max * 0.3 - penalty;
+        const penalty = Math.min(Math.round(deviation / 10), 3);
+        score -= penalty;
       }
     }
 
-    if (roughData) {
+    // No Roughness map → -5 points
+    if (!roughData) {
+      score -= 5;
+    } else {
       const { data } = roughData;
       let brightSum = 0;
       let pixelCount = 0;
@@ -608,25 +616,26 @@ class ModelEvaluator {
       }
       const avgBrightness = brightSum / pixelCount;
       if (avgBrightness <= 100) {
-        score += max * 0.3;
+        // Good roughness value
       } else {
         const deviation = Math.abs(avgBrightness - 100);
-        const penalty = Math.min(Math.round(deviation / 5), max * 0.2);
-        score += max * 0.3 - penalty;
+        const penalty = Math.min(Math.round(deviation / 10), 3);
+        score -= penalty;
       }
     }
 
-    return Math.min(score, max);
+    return Math.max(score, 0);
   }
 
   static _evalNormalMapQuality(tex) {
     const max = RAW_MAX.normalMapQuality;
-    if (!tex || !tex.hasNormalMap) return max * 0.3;
+    // No normal map uploaded → 0 points
+    if (!tex || !tex.hasNormalMap) return 0;
 
     const normalData = tex.imageData?.normalMap;
-    const colorData = tex.imageData?.baseColor;
+    if (!normalData) return 0;
 
-    if (!normalData) return max * 0.7;
+    const colorData = tex.imageData?.baseColor;
 
     let score = max * 0.6;
 
