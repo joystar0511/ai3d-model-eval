@@ -580,14 +580,11 @@ class ModelViewer {
 
     totalEdges = edgeLengths.length;
 
-    // Compute close-pair data: average edge length as baseline + pairs below 5% of average
-    const avgEdgeLengthPre = edgeLengths.length > 0
-      ? edgeLengths.reduce((a, b) => a + b, 0) / edgeLengths.length
-      : 0;
-    const closePairData = this._computeClosePairData(positions, avgEdgeLengthPre);
+    // Count duplicate (overlapping) vertices using spatial hash
+    const duplicateVertexPairs = this._countDuplicateVertices(positions);
     const hiddenFaces = this._findHiddenFaces(faceNormals);
 
-    const avgEdgeLength = avgEdgeLengthPre;
+    const avgEdgeLength = edgeLengths.reduce((a, b) => a + b, 0) / Math.max(edgeLengths.length, 1);
     const edgeLengthVariance = edgeLengths.reduce((sum, len) => sum + Math.pow(len - avgEdgeLength, 2), 0) / Math.max(edgeLengths.length, 1);
 
     this.geometryData = {
@@ -598,8 +595,7 @@ class ModelViewer {
       uvs,
       edgeLengths,
       faceNormals,
-      pairDistanceAvg: closePairData.avg,
-      closePairDistances: closePairData.distances,
+      duplicateVertexPairs,
       hiddenFaces,
       avgEdgeLength,
       edgeLengthVariance,
@@ -609,82 +605,46 @@ class ModelViewer {
   }
 
   /**
-   * Compute close-pair data for the "重合点" scoring dimension.
+   * Count duplicate (overlapping) vertex pairs using a spatial hash grid.
    *
-   * Algorithm:
-   * 1. Deduplicate buffer-geometry positions (same vertex may appear
-   *    multiple times with different normals/UVs).
-   * 2. Use the average EDGE LENGTH as the baseline ("平均值").
-   * 3. Use a spatial hash grid to efficiently find every pair whose
-   *    distance is below 5% of that average.
+   * Two vertices within EPS = 0.0001 of each other are considered "duplicate".
+   * Each such pair counts as one duplicate pair.
    *
-   * Returns { avg, distances } where:
-   *   avg        — average edge length (the "平均值" in scoring criteria)
-   *   distances  — array of actual distances for pairs below 5% of avg
+   * Returns the number of duplicate pairs found.
    */
-  _computeClosePairData(positions, avgEdgeLength) {
-    // --- Step 0: deduplicate positions ---
-    // Buffer geometry splits one logical vertex into multiple entries
-    // (different normals / UVs). These near-duplicates differ by ~1e-5 to 1e-4
-    // due to floating-point precision, NOT exactly 0.
-    // Use 1% of avgEdgeLength as dedup threshold: vertices closer than this
-    // are considered the same point and removed before close-pair detection.
-    const DEDUP_EPS = Math.max(avgEdgeLength * 0.01, 1e-6);
-    const seen = new Set();
-    const unique = [];
-    let dedupRemoved = 0;
-    for (const p of positions) {
-      const key = `${Math.round(p.x / DEDUP_EPS)},${Math.round(p.y / DEDUP_EPS)},${Math.round(p.z / DEDUP_EPS)}`;
-      if (!seen.has(key)) {
-        seen.add(key);
-        unique.push(p);
-      } else {
-        dedupRemoved++;
-      }
-    }
-
-    const n = unique.length;
-    if (n < 2 || !avgEdgeLength || avgEdgeLength < 1e-10) {
-      console.log(`[重合点-采集] 唯一顶点=${n}, 平均边长=${avgEdgeLength?.toFixed(6)}, 跳过(数据不足)`);
-      return { avg: 0, distances: [] };
-    }
-
-    // --- Step 1: use average edge length as the baseline ---
-    const avgDistance = avgEdgeLength;
-    const threshold = avgDistance * 0.05;
-
-    console.log(`[重合点-采集] 原始顶点=${positions.length}, 去重移除=${dedupRemoved}, 去重后=${n}, 平均边长=${avgDistance.toFixed(6)}, 去重精度=${DEDUP_EPS.toFixed(6)}, 5%阈值=${threshold.toFixed(6)}`);
-
-    // --- Step 2: find all pairs with distance < 5% of average ---
-    const closePairDistances = [];
-    const MAX_CLOSE_PAIRS = 500;
-
-    const cellSize = threshold;
+  _countDuplicateVertices(positions) {
+    const EPS = 0.0001; // 0.000001 * 100
+    const cellSize = EPS;
     const grid = new Map();
-    const maxCheck = Math.min(n, 50000);
+    let pairCount = 0;
+    const MAX_PAIRS = 10; // cap at 10 pairs = 10 points deduction max
 
-    for (let i = 0; i < maxCheck; i++) {
-      if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
+    for (let i = 0; i < positions.length; i++) {
+      if (pairCount >= MAX_PAIRS) break;
 
-      const p = unique[i];
+      const p = positions[i];
       const gx = Math.floor(p.x / cellSize);
       const gy = Math.floor(p.y / cellSize);
       const gz = Math.floor(p.z / cellSize);
 
+      let isDuplicate = false;
+
+      // Check 3×3×3 neighbouring cells
       for (let dx = -1; dx <= 1; dx++) {
-        if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
+        if (isDuplicate || pairCount >= MAX_PAIRS) break;
         for (let dy = -1; dy <= 1; dy++) {
-          if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
+          if (isDuplicate || pairCount >= MAX_PAIRS) break;
           for (let dz = -1; dz <= 1; dz++) {
-            if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
+            if (isDuplicate || pairCount >= MAX_PAIRS) break;
             const nkey = `${gx + dx},${gy + dy},${gz + dz}`;
             const neighbors = grid.get(nkey);
             if (neighbors) {
               for (const idx of neighbors) {
-                const d = unique[idx].distanceTo(p);
-                if (d < threshold) {
-                  closePairDistances.push(d);
-                  if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
+                const d = positions[idx].distanceTo(p);
+                if (d < EPS) {
+                  pairCount++;
+                  isDuplicate = true;
+                  break;
                 }
               }
             }
@@ -692,20 +652,14 @@ class ModelViewer {
         }
       }
 
+      // Add current vertex to grid
       const key = `${gx},${gy},${gz}`;
       if (!grid.has(key)) grid.set(key, []);
       grid.get(key).push(i);
     }
 
-    console.log(`[重合点-采集] 找到近距点对=${closePairDistances.length}对`);
-    if (closePairDistances.length > 0 && closePairDistances.length <= 20) {
-      closePairDistances.forEach((d, i) => {
-        const pct = (d / avgDistance) * 100;
-        console.log(`  对${i}: 距离=${d.toFixed(6)} (${pct.toFixed(2)}% of 平均边长)`);
-      });
-    }
-
-    return { avg: avgDistance, distances: closePairDistances };
+    console.log(`[重合点-采集] 顶点数=${positions.length}, EPS=${EPS}, 重复顶点对=${pairCount}`);
+    return pairCount;
   }
 
   _findHiddenFaces(faceNormals) {
