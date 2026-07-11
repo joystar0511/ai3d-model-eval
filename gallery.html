@@ -1,0 +1,42 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>模型库 - 全部模型</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧊</text></svg>" />
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header">
+    <a href="index.html" class="back-btn">← 返回</a>
+    <h1>📦 模型库 — 全部模型</h1>
+    <nav class="header-nav">
+      <a href="scoring.html" target="_blank">评分标准</a>
+    </nav>
+  </header>
+
+  <!-- Gallery Grid -->
+  <div class="gallery-container">
+    <div class="gallery-grid" id="galleryGrid">
+      <div class="library-empty-state">
+        <span class="empty-icon">📭</span>
+        <p>模型库暂无模型</p>
+        <p class="empty-hint">评测完成后可将模型分享到此处</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Detail Overlay -->
+  <div class="gallery-detail-overlay" id="detailOverlay">
+    <div class="gallery-detail-panel" id="detailPanel">
+      <button class="detail-close-btn" id="detailCloseBtn">✕</button>
+      <div class="detail-content" id="detailContent"></div>
+    </div>
+  </div>
+
+  <script type="module" src="js/gallery.js"></script>
+</body>
+</html>
