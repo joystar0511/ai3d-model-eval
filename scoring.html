@@ -20,7 +20,7 @@
   <div class="scoring-page">
     <h1>AI 3D 拓扑低模评测 - 评分标准</h1>
     <p style="text-align:center;color:var(--text-dim);margin-bottom:32px;">
-      满分 100 分（11 个维度，按权重归一化）
+      满分 100 分（12 个维度，按权重归一化）
     </p>
 
     <table class="scoring-table">
@@ -60,7 +60,7 @@
         <tr>
           <td class="item-col">UV 利用度</td>
           <td>看此模型 UV 的所有 UV 壳在 (1,1) 象限内的占比</td>
-          <td class="score-col">20</td>
+          <td class="score-col">10</td>
         </tr>
         <tr>
           <td class="item-col">贴图细节与复杂性</td>
@@ -79,12 +79,17 @@
         </tr>
         <tr>
           <td class="item-col">材质合理性</td>
-          <td>检查金属的金属度贴图和粗糙度贴图是否合理</td>
+          <td>检查金属度贴图和粗糙度贴图是否合理。无金属度贴图扣 2 分，无粗糙度贴图扣 2 分；有贴图则按参数偏差正常扣分，最低可低于 6 分</td>
           <td class="score-col">10</td>
         </tr>
         <tr>
           <td class="item-col">法线贴图质量</td>
-          <td>检查颜色贴图凹陷凸起的地方是否有对应法线</td>
+          <td>检查颜色贴图凹陷凸起的地方是否有对应法线。无法线贴图按 8 分计；有法线贴图则按蓝通道质量和与颜色贴图对应度评分，问题较多时可低于 8 分</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">模型光滑度</td>
+          <td>评估造型是否过度圆润。大于 20000 面每多 1000 面扣 0.5 分；小于 5000 面每少 1000 面扣 0.5 分；5000-20000 面之间与 15000 比较，每偏离 1000 面扣 0.1 分</td>
           <td class="score-col">10</td>
         </tr>
       </tbody>
