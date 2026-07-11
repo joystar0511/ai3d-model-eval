@@ -83,11 +83,58 @@ class GalleryApp {
           ${notesHTML}
           ${metaHTML}
         </div>
+        ${m.modelFile ? `<button class="gallery-download-btn" title="下载模型及贴图文件">⬇</button>` : ''}
       `;
 
-      card.addEventListener('click', () => this._showDetail(m));
+      card.addEventListener('click', (e) => {
+        // Don't trigger detail when clicking download button
+        if (e.target.classList.contains('gallery-download-btn')) {
+          e.stopPropagation();
+          this._downloadModel(m);
+          return;
+        }
+        this._showDetail(m);
+      });
       this.galleryGrid.appendChild(card);
     }
+  }
+
+  _downloadModel(model) {
+    const m = model;
+    const hasModelFile = !!m.modelFile;
+    const texFiles = m.textureFiles || {};
+    const texCount = Object.values(texFiles).filter(f => f && f.data).length;
+
+    if (!hasModelFile && texCount === 0) {
+      alert('该模型没有可下载的文件数据');
+      return;
+    }
+
+    // Download model file
+    if (hasModelFile) {
+      const fileName = m.meta?.fileName || `${m.name || 'model'}.glb`;
+      this._triggerDownload(m.modelFile, fileName);
+    }
+
+    // Download texture files with slight delay to avoid browser blocking
+    let delay = 300;
+    for (const [key, texFile] of Object.entries(texFiles)) {
+      if (texFile && texFile.data) {
+        setTimeout(() => {
+          this._triggerDownload(texFile.data, texFile.name || `${key}.png`);
+        }, delay);
+        delay += 300;
+      }
+    }
+  }
+
+  _triggerDownload(dataUrl, fileName) {
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 
   _showDetail(model) {
