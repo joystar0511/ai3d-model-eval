@@ -545,9 +545,9 @@ class ModelViewer {
           const a = geo.index.getX(i);
           const b = geo.index.getX(i + 1);
           const c = geo.index.getX(i + 2);
-          const va = new THREE.Vector3().fromBufferAttribute(posAttr, a);
-          const vb = new THREE.Vector3().fromBufferAttribute(posAttr, b);
-          const vc = new THREE.Vector3().fromBufferAttribute(posAttr, c);
+          const va = new THREE.Vector3().fromBufferAttribute(posAttr, a).applyMatrix4(worldMatrix);
+          const vb = new THREE.Vector3().fromBufferAttribute(posAttr, b).applyMatrix4(worldMatrix);
+          const vc = new THREE.Vector3().fromBufferAttribute(posAttr, c).applyMatrix4(worldMatrix);
           edgeLengths.push(va.distanceTo(vb), vb.distanceTo(vc), vc.distanceTo(va));
 
           const normal = new THREE.Vector3();
@@ -560,9 +560,9 @@ class ModelViewer {
         totalFaces += posAttr.count / 3;
         const posLimit2 = Math.min(posAttr.count, faceLimit * 3);
         for (let i = 0; i < posLimit2; i += 3) {
-          const va = new THREE.Vector3().fromBufferAttribute(posAttr, i);
-          const vb = new THREE.Vector3().fromBufferAttribute(posAttr, i + 1);
-          const vc = new THREE.Vector3().fromBufferAttribute(posAttr, i + 2);
+          const va = new THREE.Vector3().fromBufferAttribute(posAttr, i).applyMatrix4(worldMatrix);
+          const vb = new THREE.Vector3().fromBufferAttribute(posAttr, i + 1).applyMatrix4(worldMatrix);
+          const vc = new THREE.Vector3().fromBufferAttribute(posAttr, i + 2).applyMatrix4(worldMatrix);
           edgeLengths.push(va.distanceTo(vb), vb.distanceTo(vc), vc.distanceTo(va));
 
           const normal = new THREE.Vector3();
@@ -624,14 +624,22 @@ class ModelViewer {
    */
   _computeClosePairData(positions, avgEdgeLength) {
     // --- Step 0: deduplicate positions ---
-    const DEDUP_EPS = 1e-6;
+    // Buffer geometry splits one logical vertex into multiple entries
+    // (different normals / UVs). These near-duplicates differ by ~1e-5 to 1e-4
+    // due to floating-point precision, NOT exactly 0.
+    // Use 1% of avgEdgeLength as dedup threshold: vertices closer than this
+    // are considered the same point and removed before close-pair detection.
+    const DEDUP_EPS = Math.max(avgEdgeLength * 0.01, 1e-6);
     const seen = new Set();
     const unique = [];
+    let dedupRemoved = 0;
     for (const p of positions) {
       const key = `${Math.round(p.x / DEDUP_EPS)},${Math.round(p.y / DEDUP_EPS)},${Math.round(p.z / DEDUP_EPS)}`;
       if (!seen.has(key)) {
         seen.add(key);
         unique.push(p);
+      } else {
+        dedupRemoved++;
       }
     }
 
@@ -645,7 +653,7 @@ class ModelViewer {
     const avgDistance = avgEdgeLength;
     const threshold = avgDistance * 0.05;
 
-    console.log(`[重合点-采集] 原始顶点=${positions.length}, 去重后=${n}, 平均边长=${avgDistance.toFixed(6)}, 5%阈值=${threshold.toFixed(6)}`);
+    console.log(`[重合点-采集] 原始顶点=${positions.length}, 去重移除=${dedupRemoved}, 去重后=${n}, 平均边长=${avgDistance.toFixed(6)}, 去重精度=${DEDUP_EPS.toFixed(6)}, 5%阈值=${threshold.toFixed(6)}`);
 
     // --- Step 2: find all pairs with distance < 5% of average ---
     const closePairDistances = [];
