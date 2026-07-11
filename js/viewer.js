@@ -102,6 +102,14 @@ class ModelViewer {
     this.infoDiv = document.createElement('div');
     this.infoDiv.className = 'viewer-info';
     this.container.appendChild(this.infoDiv);
+
+    // Grid toggle button — sits next to the stats text
+    this.gridToggleBtn = document.createElement('button');
+    this.gridToggleBtn.className = 'grid-toggle-btn';
+    this.gridToggleBtn.textContent = '网格 ON';
+    this.gridToggleBtn.title = '显示/隐藏地面网格';
+    this.gridToggleBtn.addEventListener('click', () => this._toggleGrid());
+    this.container.appendChild(this.gridToggleBtn);
   }
 
   async _loadModel() {
@@ -572,8 +580,8 @@ class ModelViewer {
 
     totalEdges = edgeLengths.length;
 
-    // Overlapping vertices threshold: 0.0001cm = 0.000001m
-    const overlappingPairs = this._findOverlappingVertices(positions, 0.000001);
+    // Compute close-pair data: average pairwise distance + pairs below 5% of average
+    const closePairData = this._computeClosePairData(positions);
     const hiddenFaces = this._findHiddenFaces(faceNormals);
 
     const avgEdgeLength = edgeLengths.reduce((a, b) => a + b, 0) / Math.max(edgeLengths.length, 1);
@@ -587,7 +595,8 @@ class ModelViewer {
       uvs,
       edgeLengths,
       faceNormals,
-      overlappingPairs,
+      pairDistanceAvg: closePairData.avg,
+      closePairDistances: closePairData.distances,
       hiddenFaces,
       avgEdgeLength,
       edgeLengthVariance,
@@ -596,34 +605,101 @@ class ModelViewer {
     };
   }
 
-  _findOverlappingVertices(positions, threshold) {
-    let count = 0;
-    const maxCheck = Math.min(positions.length, 50000);
-    const grid = new Map();
+  /**
+   * Compute close-pair data for the "重合点" scoring dimension.
+   *
+   * Algorithm:
+   * 1. Compute the average of ALL pairwise distances (sampled for large models).
+   * 2. Use a spatial hash grid to efficiently find every pair whose distance
+   *    is below 5% of that average.
+   *
+   * Returns { avg, distances } where:
+   *   avg        — average pairwise distance
+   *   distances  — array of actual distances for pairs below 5% of avg
+   */
+  _computeClosePairData(positions) {
+    const n = positions.length;
+    if (n < 2) return { avg: 0, distances: [] };
+
+    // --- Step 1: average pairwise distance ---
+    const SAMPLE_THRESHOLD = 3000; // exact if n ≤ 3000, otherwise sample
+    let avgDistance = 0;
+
+    if (n <= SAMPLE_THRESHOLD) {
+      let sum = 0;
+      let count = 0;
+      for (let i = 0; i < n; i++) {
+        for (let j = i + 1; j < n; j++) {
+          sum += positions[i].distanceTo(positions[j]);
+          count++;
+        }
+      }
+      avgDistance = count > 0 ? sum / count : 0;
+    } else {
+      // Uniform stride sampling for spatial representativeness
+      const step = Math.ceil(n / SAMPLE_THRESHOLD);
+      const sample = [];
+      for (let i = 0; i < n; i += step) sample.push(positions[i]);
+      const sn = sample.length;
+      let sum = 0;
+      let count = 0;
+      for (let i = 0; i < sn; i++) {
+        for (let j = i + 1; j < sn; j++) {
+          sum += sample[i].distanceTo(sample[j]);
+          count++;
+        }
+      }
+      avgDistance = count > 0 ? sum / count : 0;
+    }
+
+    if (avgDistance < 1e-10) return { avg: 0, distances: [] };
+
+    // --- Step 2: find all pairs with distance < 5% of average ---
+    const threshold = avgDistance * 0.05;
+    const closePairDistances = [];
+    const MAX_CLOSE_PAIRS = 500; // cap; 500 pairs at minimum 0.5 each = 250 pts, well over the 10-pt cap
+
     const cellSize = threshold;
+    const grid = new Map();
+    const maxCheck = Math.min(n, 50000);
+
     for (let i = 0; i < maxCheck; i++) {
+      if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
+
       const p = positions[i];
-      const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)},${Math.floor(p.z / cellSize)}`;
-      if (!grid.has(key)) grid.set(key, []);
-      const cell = grid.get(key);
+      const gx = Math.floor(p.x / cellSize);
+      const gy = Math.floor(p.y / cellSize);
+      const gz = Math.floor(p.z / cellSize);
+
+      // Check 3×3×3 neighbouring cells
       for (let dx = -1; dx <= 1; dx++) {
+        if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
         for (let dy = -1; dy <= 1; dy++) {
+          if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
           for (let dz = -1; dz <= 1; dz++) {
-            const nkey = `${Math.floor(p.x / cellSize) + dx},${Math.floor(p.y / cellSize) + dy},${Math.floor(p.z / cellSize) + dz}`;
+            if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
+            const nkey = `${gx + dx},${gy + dy},${gz + dz}`;
             const neighbors = grid.get(nkey);
             if (neighbors) {
               for (const idx of neighbors) {
-                if (positions[idx].distanceTo(p) < threshold) {
-                  count++;
+                const d = positions[idx].distanceTo(p);
+                if (d < threshold) {
+                  closePairDistances.push(d);
+                  if (closePairDistances.length >= MAX_CLOSE_PAIRS) break;
                 }
               }
             }
           }
         }
       }
-      cell.push(i);
+
+      // Add current vertex to grid AFTER checking (avoids self-pairing & double counting)
+      const key = `${gx},${gy},${gz}`;
+      if (!grid.has(key)) grid.set(key, []);
+      grid.get(key).push(i);
     }
-    return count;
+
+    return { avg: avgDistance, distances: closePairDistances };
   }
 
   _findHiddenFaces(faceNormals) {
@@ -735,6 +811,13 @@ class ModelViewer {
     this._rafId = requestAnimationFrame(() => this._animate());
     this.controls.update();
     this.renderer.render(this.scene, this.camera);
+  }
+
+  /** Toggle ground grid visibility */
+  _toggleGrid() {
+    this.gridHelper.visible = !this.gridHelper.visible;
+    this.gridToggleBtn.textContent = this.gridHelper.visible ? '网格 ON' : '网格 OFF';
+    this.gridToggleBtn.classList.toggle('grid-off', !this.gridHelper.visible);
   }
 
   dispose() {
