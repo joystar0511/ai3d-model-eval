@@ -1,14 +1,26 @@
 /**
  * App - Main application controller for AI 3D Topology Low-Poly Model Evaluation Tool
+ *
+ * Models and textures are uploaded separately:
+ * - Model file: OBJ, FBX, GLTF/GLB, STL, PLY
+ * - Texture files: BaseColor, NormalMap, MetallicMap, Roughness, Emission
  */
 
 import { ModelViewer } from './viewer.js';
 import { ModelEvaluator, DIMENSIONS } from './evaluator.js';
 import { CloudStorage } from './cloud.js';
 
+const TEXTURE_SLOTS = [
+  { key: 'baseColor',   label: 'BaseColor',   icon: '🎨', accept: 'image/*' },
+  { key: 'normalMap',   label: 'NormalMap',   icon: '📐', accept: 'image/*' },
+  { key: 'metallicMap', label: 'MetallicMap', icon: '✨', accept: 'image/*' },
+  { key: 'roughness',   label: 'Roughness',   icon: '🔍', accept: 'image/*' },
+  { key: 'emission',    label: 'Emission',    icon: '💡', accept: 'image/*' },
+];
+
 class App {
   constructor() {
-    this.models = []; // { id, file, name, viewer, evaluation, notes, shared }
+    this.models = [];
     this.isEvaluating = false;
     this._initDOM();
     this._bindEvents();
@@ -31,14 +43,12 @@ class App {
   }
 
   _bindEvents() {
-    // Initial upload zone
     this.initialUpload.addEventListener('click', () => this.fileInput.click());
     this.initialUpload.addEventListener('dragover', e => this._onDragOver(e));
     this.initialUpload.addEventListener('dragleave', e => this._onDragLeave(e));
     this.initialUpload.addEventListener('drop', e => this._onDrop(e));
     this.fileInput.addEventListener('change', e => this._handleFiles(e.target.files));
 
-    // Split buttons
     this.btnAddMore.addEventListener('click', () => this.fileInputAdd.click());
     this.btnEvaluate.addEventListener('click', () => this._startEvaluation());
     this.fileInputAdd.addEventListener('change', e => this._handleFiles(e.target.files));
@@ -75,7 +85,6 @@ class App {
       validCount++;
     }
 
-    // Reset file input
     this.fileInput.value = '';
     this.fileInputAdd.value = '';
 
@@ -94,6 +103,13 @@ class App {
       evaluation: null,
       notes: '',
       shared: false,
+      textureFiles: {
+        baseColor: null,
+        normalMap: null,
+        metallicMap: null,
+        roughness: null,
+        emission: null,
+      },
     };
     this.models.push(model);
     this._renderModelCard(model);
@@ -115,6 +131,25 @@ class App {
         <button class="viewer-mode-btn" data-mode="color">颜色贴图</button>
         <button class="viewer-mode-btn" data-mode="material">材质灯光</button>
       </div>
+
+      <!-- Texture Upload Section -->
+      <div class="texture-section">
+        <div class="texture-section-title">PBR 贴图上传</div>
+        <div class="texture-slots" id="texture-slots-${model.id}">
+          ${TEXTURE_SLOTS.map(slot => `
+            <div class="texture-slot" data-model="${model.id}" data-key="${slot.key}">
+              <input type="file" class="texture-file-input" accept="${slot.accept}" data-model="${model.id}" data-key="${slot.key}" style="display:none;" />
+              <div class="texture-slot-inner">
+                <span class="texture-slot-icon">${slot.icon}</span>
+                <span class="texture-slot-label">${slot.label}</span>
+                <span class="texture-slot-status" id="tex-status-${model.id}-${slot.key}">未上传</span>
+              </div>
+              <button class="texture-slot-btn" data-model="${model.id}" data-key="${slot.key}">选择</button>
+            </div>
+          `).join('')}
+        </div>
+      </div>
+
       <div class="model-name-section">
         <input type="text" class="model-name-input" placeholder="请输入模型名称..." data-id="${model.id}" value="${this._guessName(model.file.name)}" />
       </div>
@@ -146,16 +181,60 @@ class App {
     model.name = this._guessName(model.file.name);
     nameInput.value = model.name;
 
+    // Bind texture upload slots
+    card.querySelectorAll('.texture-slot-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const fileInput = card.querySelector(`.texture-file-input[data-key="${btn.dataset.key}"]`);
+        fileInput.click();
+      });
+    });
+
+    card.querySelectorAll('.texture-file-input').forEach(input => {
+      input.addEventListener('change', e => {
+        if (e.target.files.length > 0) {
+          this._handleTextureUpload(e.target.dataset.model, e.target.dataset.key, e.target.files[0]);
+        }
+      });
+    });
+
     // Bind remove button
     card.querySelector('.card-remove').addEventListener('click', () => {
       this._removeModel(model.id);
     });
   }
 
+  async _handleTextureUpload(modelId, textureKey, file) {
+    const model = this.models.find(m => m.id === modelId);
+    if (!model) return;
+
+    model.textureFiles[textureKey] = file;
+
+    // Update status display
+    const statusEl = document.getElementById(`tex-status-${modelId}-${textureKey}`);
+    if (statusEl) {
+      const fileName = file.name.length > 15 ? file.name.slice(0, 12) + '...' : file.name;
+      statusEl.textContent = fileName;
+      statusEl.classList.add('uploaded');
+    }
+
+    // Update slot visual
+    const slotEl = document.querySelector(`.texture-slot[data-model="${modelId}"][data-key="${textureKey}"]`);
+    if (slotEl) slotEl.classList.add('has-texture');
+
+    // Update viewer textures
+    await model.viewer.setTextures(model.textureFiles);
+
+    // Auto-switch to material mode if user uploads textures
+    if (textureKey === 'baseColor') {
+      const colorBtn = document.querySelector(`#modes-${modelId} .viewer-mode-btn[data-mode="color"]`);
+      if (colorBtn) colorBtn.click();
+    }
+
+    this._showToast(`${TEXTURE_SLOTS.find(s => s.key === textureKey).label} 已加载`, 'success');
+  }
+
   _guessName(fileName) {
-    // Remove extension and use as default name
-    const name = fileName.replace(/\.[^.]+$/, '');
-    return name;
+    return fileName.replace(/\.[^.]+$/, '');
   }
 
   _removeModel(modelId) {
@@ -169,7 +248,6 @@ class App {
     const card = document.getElementById(`card-${modelId}`);
     if (card) card.remove();
 
-    // Update indices
     this.models.forEach((m, i) => {
       const idxEl = document.querySelector(`#card-${m.id} .card-index`);
       if (idxEl) idxEl.textContent = `模型 #${i + 1}`;
@@ -191,11 +269,9 @@ class App {
   }
 
   async _startEvaluation() {
-    // Validate all models have names
     const unnamed = this.models.filter(m => !m.name || m.name.trim() === '');
     if (unnamed.length > 0) {
       this._showToast(`还有 ${unnamed.length} 个模型未命名，请为所有模型命名后再开始评测`, 'error');
-      // Highlight unnamed inputs
       unnamed.forEach(m => {
         const input = document.querySelector(`.model-name-input[data-id="${m.id}"]`);
         if (input) {
@@ -210,7 +286,6 @@ class App {
     if (this.isEvaluating) return;
     this.isEvaluating = true;
 
-    // Show progress overlay
     this.progressOverlay.classList.add('visible');
     this.progressBar.style.width = '0%';
     this.progressText.textContent = '正在初始化AI分析引擎...';
@@ -220,18 +295,12 @@ class App {
     const totalSteps = this.models.length * DIMENSIONS.length;
     let currentStep = 0;
 
-    // Evaluate each model
     for (let i = 0; i < this.models.length; i++) {
       const model = this.models[i];
       this.progressText.textContent = `正在分析模型 "${model.name}" (${i + 1}/${this.models.length})...`;
 
       const geoData = model.viewer.getGeometryData();
-      const texInfo = {
-        hasColorMap: model.viewer.hasTextures(),
-        hasNormalMap: model.viewer.textures?.normal || false,
-        hasMetalnessMap: model.viewer.textures?.metalness || false,
-        hasRoughnessMap: model.viewer.textures?.roughness || false,
-      };
+      const texInfo = model.viewer.getTextureInfo();
 
       const result = await ModelEvaluator.evaluate(geoData, texInfo, (progress) => {
         const overall = Math.round(((currentStep + progress / 100 * DIMENSIONS.length) / totalSteps) * 100);
@@ -241,7 +310,6 @@ class App {
       model.evaluation = result;
       currentStep += DIMENSIONS.length;
 
-      // Render score
       this._renderScore(model);
     }
 
@@ -249,14 +317,11 @@ class App {
     this.progressText.textContent = '分析完成！';
     await this._delay(600);
 
-    // Hide progress
     this.progressOverlay.classList.remove('visible');
     this.isEvaluating = false;
 
-    // Show notes & share section for each model
     this.models.forEach(m => this._renderNotesAndShare(m));
 
-    // Show PK section if 2+ models
     if (this.models.length >= 2) {
       this._renderPK();
     }
@@ -301,13 +366,11 @@ class App {
     `;
     notesSection.classList.add('visible');
 
-    // Bind textarea
     const textarea = notesSection.querySelector('textarea');
     textarea.addEventListener('input', e => {
       model.notes = e.target.value;
     });
 
-    // Bind share button
     const shareBtn = notesSection.querySelector('.share-btn');
     shareBtn.addEventListener('click', async () => {
       await this._shareModel(model, shareBtn);
@@ -321,6 +384,7 @@ class App {
     try {
       const thumbnail = model.viewer.captureThumbnail();
       const geoData = model.viewer.getGeometryData();
+      const texInfo = model.viewer.getTextureInfo();
 
       const modelData = {
         name: model.name,
@@ -330,7 +394,8 @@ class App {
         meta: {
           vertices: geoData?.totalVertices || 0,
           faces: geoData?.totalFaces || 0,
-          hasTextures: model.viewer.hasTextures(),
+          hasTextures: texInfo.hasColorMap || texInfo.hasNormalMap || texInfo.hasMetalnessMap || texInfo.hasRoughnessMap || texInfo.hasEmissionMap,
+          textureCount: [texInfo.hasColorMap, texInfo.hasNormalMap, texInfo.hasMetalnessMap, texInfo.hasRoughnessMap, texInfo.hasEmissionMap].filter(Boolean).length,
           fileName: model.file.name,
           fileSize: model.file.size,
         },
@@ -362,7 +427,6 @@ class App {
     );
     if (!pkData) return;
 
-    // Build comparison bars
     let compHTML = '';
     for (const dim of pkData.dimensionComparison) {
       compHTML += `
@@ -423,7 +487,6 @@ class App {
   }
 }
 
-// Start app when DOM is ready
 if (document.readyState === 'loading') {
   document.addEventListener('DOMContentLoaded', () => new App());
 } else {
