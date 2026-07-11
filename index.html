@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 3D 拓扑低模评测工具</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧊</text></svg>" />
+  <script type="importmap">
+  {
+    "imports": {
+      "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+      "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+    }
+  }
+  </script>
+</head>
+<body>
+
+  <!-- Header -->
+  <header class="app-header">
+    <h1>🧊 AI 3D 拓扑低模评测工具</h1>
+    <nav class="header-nav">
+      <a href="scoring.html" target="_blank">评分标准</a>
+      <a href="library.html" target="_blank">模型库</a>
+    </nav>
+  </header>
+
+  <!-- Upload Area -->
+  <div class="upload-area" id="uploadArea">
+    <!-- Scoring criteria link -->
+    <div class="scoring-link">
+      想了解评测标准？ <a href="scoring.html" target="_blank">点击查看评分标准</a>
+    </div>
+
+    <!-- Initial upload zone -->
+    <div class="upload-zone" id="initialUpload">
+      <div class="upload-icon">📁</div>
+      <p><strong>点击或拖拽上传模型文件</strong></p>
+      <p class="formats">支持格式：OBJ, FBX, GLTF, GLB, STL, PLY, BLEND</p>
+    </div>
+
+    <!-- Split buttons (hidden initially) -->
+    <div class="split-buttons" id="splitButtons" style="display:none;">
+      <button class="btn btn-blue" id="btnAddMore">
+        <span>📂 继续添加模型</span>
+      </button>
+      <button class="btn btn-red" id="btnEvaluate">
+        <span>🚀 开始评测</span>
+      </button>
+    </div>
+
+    <!-- Model library link -->
+    <div class="scoring-link" style="margin-top:24px;">
+      <a href="library.html" target="_blank">浏览云端模型库 →</a>
+    </div>
+  </div>
+
+  <!-- Hidden file inputs -->
+  <input type="file" id="fileInput" class="hidden-file-input" multiple
+    accept=".obj,.fbx,.gltf,.glb,.stl,.ply,.blend" />
+  <input type="file" id="fileInputAdd" class="hidden-file-input" multiple
+    accept=".obj,.fbx,.gltf,.glb,.stl,.ply,.blend" />
+
+  <!-- Model Grid -->
+  <div class="model-grid" id="modelGrid" style="display:none;"></div>
+
+  <!-- PK Section -->
+  <div class="pk-section" id="pkSection"></div>
+
+  <!-- Progress Overlay -->
+  <div class="progress-overlay" id="progressOverlay">
+    <div class="progress-box">
+      <div class="spinner"></div>
+      <h3>AI 模型分析中</h3>
+      <div class="progress-bar-outer">
+        <div class="progress-bar-inner" id="progressBar"></div>
+      </div>
+      <div class="progress-text" id="progressText">正在初始化...</div>
+    </div>
+  </div>
+
+  <!-- Toast -->
+  <div class="toast" id="toast"></div>
+
+  <!-- Main App Script -->
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

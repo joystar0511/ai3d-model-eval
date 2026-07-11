@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>模型库 - AI 3D 拓扑低模评测</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📚</text></svg>" />
+</head>
+<body>
+
+  <header class="app-header">
+    <h1>📚 云端模型库</h1>
+    <nav class="header-nav">
+      <a href="index.html">← 返回评测工具</a>
+      <a href="scoring.html" target="_blank">评分标准</a>
+    </nav>
+  </header>
+
+  <div class="library-page">
+    <h1>云端模型库</h1>
+    <p style="text-align:center;color:var(--text-dim);margin-bottom:24px;">
+      浏览所有用户分享的模型及评测结果
+    </p>
+
+    <div style="display:flex;gap:12px;justify-content:center;margin-bottom:24px;">
+      <button class="btn btn-outline btn-sm" id="btnRefresh">🔄 刷新</button>
+      <button class="btn btn-outline btn-sm" id="btnSortScore">按评分排序</button>
+      <button class="btn btn-outline btn-sm" id="btnSortTime">按时间排序</button>
+    </div>
+
+    <div id="libraryContent">
+      <div class="library-empty">
+        <div class="empty-icon">📦</div>
+        <p>模型库为空，快去评测并分享你的模型吧！</p>
+        <a href="index.html" class="btn btn-blue btn-sm" style="display:inline-flex;margin-top:16px;">前往评测</a>
+      </div>
+    </div>
+  </div>
+
+  <script type="module">
+    import { CloudStorage } from './js/cloud.js';
+
+    let models = [];
+    let sortBy = 'time';
+
+    async function loadLibrary() {
+      const content = document.getElementById('libraryContent');
+      content.innerHTML = '<div style="text-align:center;padding:40px;"><div class="spinner" style="margin:0 auto;"></div><p style="margin-top:12px;color:var(--text-dim);">加载中...</p></div>';
+
+      try {
+        models = await CloudStorage.getLibrary();
+        renderLibrary();
+      } catch (e) {
+        content.innerHTML = '<div class="library-empty"><div class="empty-icon">⚠️</div><p>加载失败，请刷新重试</p></div>';
+      }
+    }
+
+    function renderLibrary() {
+      const content = document.getElementById('libraryContent');
+
+      if (!models || models.length === 0) {
+        content.innerHTML = `
+          <div class="library-empty">
+            <div class="empty-icon">📦</div>
+            <p>模型库为空，快去评测并分享你的模型吧！</p>
+            <a href="index.html" class="btn btn-blue btn-sm" style="display:inline-flex;margin-top:16px;">前往评测</a>
+          </div>
+        `;
+        return;
+      }
+
+      // Sort
+      const sorted = [...models];
+      if (sortBy === 'score') {
+        sorted.sort((a, b) => (b.scores?.totalScore || 0) - (a.scores?.totalScore || 0));
+      } else {
+        sorted.sort((a, b) => new Date(b.sharedAt) - new Date(a.sharedAt));
+      }
+
+      let html = '<div class="library-grid">';
+      for (const m of sorted) {
+        const score = m.scores?.totalScore || 'N/A';
+        const grade = m.scores?.grade || '';
+        const gradeClass = m.scores?.gradeClass || '';
+        const thumb = m.thumbnail
+          ? `<img src="${m.thumbnail}" style="width:100%;height:100%;object-fit:cover;" />`
+          : '🧊';
+        const date = new Date(m.sharedAt).toLocaleString('zh-CN');
+        const vCount = m.meta?.vertices?.toLocaleString() || 'N/A';
+        const fCount = m.meta?.faces?.toLocaleString() || 'N/A';
+
+        let breakdownHTML = '';
+        if (m.scores?.breakdown) {
+          breakdownHTML = m.scores.breakdown.map(b =>
+            `<span style="display:inline-block;font-size:11px;padding:2px 8px;background:rgba(255,255,255,0.05);border-radius:3px;margin:2px;">${b.name}: ${b.score}/${b.max}</span>`
+          ).join('');
+        }
+
+        html += `
+          <div class="library-card">
+            <div class="lib-preview">${thumb}</div>
+            <div class="lib-info">
+              <div class="lib-name">${escapeHTML(m.name)}</div>
+              <div style="display:flex;align-items:baseline;gap:8px;">
+                <span class="lib-score">${score}</span>
+                ${grade ? `<span class="score-grade ${gradeClass}">${grade}</span>` : ''}
+                <span style="font-size:14px;color:var(--text-dim);">/ 100</span>
+              </div>
+              <div style="font-size:12px;color:var(--text-dim);margin-bottom:8px;">
+                顶点: ${vCount} | 面: ${fCount} ${m.meta?.hasTextures ? '| 含贴图' : ''}
+              </div>
+              ${breakdownHTML ? `<div style="margin-bottom:8px;">${breakdownHTML}</div>` : ''}
+              ${m.notes ? `<div class="lib-notes">💬 ${escapeHTML(m.notes)}</div>` : ''}
+              <div class="lib-meta">
+                分享者: ${escapeHTML(m.sharedBy || '匿名')} | ${date}
+              </div>
+            </div>
+          </div>
+        `;
+      }
+      html += '</div>';
+      content.innerHTML = html;
+    }
+
+    function escapeHTML(str) {
+      const div = document.createElement('div');
+      div.textContent = str || '';
+      return div.innerHTML;
+    }
+
+    document.getElementById('btnRefresh').addEventListener('click', loadLibrary);
+    document.getElementById('btnSortScore').addEventListener('click', () => {
+      sortBy = 'score';
+      renderLibrary();
+    });
+    document.getElementById('btnSortTime').addEventListener('click', () => {
+      sortBy = 'time';
+      renderLibrary();
+    });
+
+    loadLibrary();
+  </script>
+
+</body>
+</html>

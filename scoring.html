@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>评分标准 - AI 3D 拓扑低模评测</title>
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📊</text></svg>" />
+</head>
+<body>
+
+  <header class="app-header">
+    <h1>📊 评分标准</h1>
+    <nav class="header-nav">
+      <a href="index.html">← 返回评测工具</a>
+      <a href="library.html" target="_blank">模型库</a>
+    </nav>
+  </header>
+
+  <div class="scoring-page">
+    <h1>AI 3D 拓扑低模评测 - 评分标准</h1>
+    <p style="text-align:center;color:var(--text-dim);margin-bottom:32px;">
+      满分 100 分（11 个维度，按权重归一化）
+    </p>
+
+    <table class="scoring-table">
+      <thead>
+        <tr>
+          <th style="width:120px;">评分项</th>
+          <th>评分细则</th>
+          <th style="width:80px;text-align:center;">分值</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr>
+          <td class="item-col">隐藏面</td>
+          <td>模型是否有个角度都看不见的面</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">破面</td>
+          <td>模型是否有破面</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">重合点</td>
+          <td>模型上是否有两个相距 0.01m 这种距离过近的点</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">布线均匀度</td>
+          <td>布线是否均匀，读取每个点到每个点之间的距离值，记录所有点之间的值形成一个数据库</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">可绑定程度</td>
+          <td>识别人形模型（后台上传的标准人体模型），与此模型造型接近的上传模型与之比较，相似度大于 50% 则归类为人物角色模型，人物角色模型需要判断所有关节布线是否合理</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">UV 利用度</td>
+          <td>看此模型 UV 的所有 UV 壳在 (1,1) 象限内的占比</td>
+          <td class="score-col">20</td>
+        </tr>
+        <tr>
+          <td class="item-col">贴图细节与复杂性</td>
+          <td>检查是否有大面积无细节纯色的色块出现</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">贴图色彩</td>
+          <td>评估材质颜色的分布是否自然以及饱和度是否合理</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">一致性与伪影</td>
+          <td>查材质纹理在不同光照或视角下的一致性</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">材质合理性</td>
+          <td>检查金属的金属度贴图和粗糙度贴图是否合理</td>
+          <td class="score-col">10</td>
+        </tr>
+        <tr>
+          <td class="item-col">法线贴图质量</td>
+          <td>检查颜色贴图凹陷凸起的地方是否有对应法线</td>
+          <td class="score-col">10</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="scoring-total">
+      原始总分 <span>120</span> 分 → 归一化满分 <span>100</span> 分
+    </div>
+
+    <div style="margin-top:32px;padding:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;">
+      <h3 style="margin-bottom:12px;">📐 评分等级说明</h3>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:12px;">
+        <div style="text-align:center;padding:12px;background:rgba(34,197,94,0.1);border-radius:8px;">
+          <div style="font-size:28px;font-weight:800;color:#4ade80;">A</div>
+          <div style="font-size:12px;color:var(--text-dim);">90-100 优秀</div>
+        </div>
+        <div style="text-align:center;padding:12px;background:rgba(59,130,246,0.1);border-radius:8px;">
+          <div style="font-size:28px;font-weight:800;color:#60a5fa;">B</div>
+          <div style="font-size:12px;color:var(--text-dim);">75-89 良好</div>
+        </div>
+        <div style="text-align:center;padding:12px;background:rgba(251,191,36,0.1);border-radius:8px;">
+          <div style="font-size:28px;font-weight:800;color:#fbbf24;">C</div>
+          <div style="font-size:12px;color:var(--text-dim);">60-74 合格</div>
+        </div>
+        <div style="text-align:center;padding:12px;background:rgba(239,68,68,0.1);border-radius:8px;">
+          <div style="font-size:28px;font-weight:800;color:#f87171;">D</div>
+          <div style="font-size:12px;color:var(--text-dim);">0-59 待改进</div>
+        </div>
+      </div>
+    </div>
+
+    <div style="text-align:center;margin-top:32px;">
+      <a href="index.html" class="btn btn-blue btn-sm" style="display:inline-flex;">← 返回评测工具</a>
+    </div>
+  </div>
+
+</body>
+</html>
