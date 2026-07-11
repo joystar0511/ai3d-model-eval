@@ -144,8 +144,13 @@ class App {
   _setGlobalMode(mode) {
     this.globalMode = mode;
 
-    // Update toolbar button states
+    // Update global toolbar button states
     this.globalModeBtns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+
+    // Update all per-card mode buttons
+    document.querySelectorAll('.card-mode-btn').forEach(btn => {
       btn.classList.toggle('active', btn.dataset.mode === mode);
     });
 
@@ -293,6 +298,22 @@ class App {
       </div>
       <div class="viewer-container" id="viewer-${model.id}"></div>
 
+      <!-- Per-card viewer mode buttons (controls global mode) -->
+      <div class="card-viewer-modes">
+        <button class="card-mode-btn ${this.globalMode === 'gray' ? 'active' : ''}" data-mode="gray" title="无贴图，灰色材质显示模型形状">
+          <span>🔘</span> 灰模显示
+        </button>
+        <button class="card-mode-btn ${this.globalMode === 'wireframe' ? 'active' : ''}" data-mode="wireframe" title="蓝色线框，查看拓扑布线结构">
+          <span>🔷</span> 线框显示
+        </button>
+        <button class="card-mode-btn ${this.globalMode === 'color' ? 'active' : ''}" data-mode="color" title="贴上颜色贴图(BaseColor)的效果">
+          <span>🎨</span> 颜色贴图
+        </button>
+        <button class="card-mode-btn ${this.globalMode === 'material' ? 'active' : ''}" data-mode="material" title="平行光 + PBR全贴图材质效果">
+          <span>💡</span> 材质效果
+        </button>
+      </div>
+
       <!-- Texture Upload Section -->
       <div class="texture-section">
         <div class="texture-section-title">PBR 贴图上传</div>
@@ -350,6 +371,13 @@ class App {
 
     card.querySelector('.card-remove').addEventListener('click', () => {
       this._removeModel(model.id);
+    });
+
+    // Per-card mode buttons (control global mode)
+    card.querySelectorAll('.card-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._setGlobalMode(btn.dataset.mode);
+      });
     });
   }
 
@@ -507,7 +535,7 @@ class App {
       typeBadgeHTML = `<div style="display:inline-flex;align-items:center;gap:6px;padding:4px 12px;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.3);border-radius:6px;font-size:12px;margin-bottom:12px;">
         <span>👤</span>
         <span style="color:var(--gold);font-weight:600;">角色模型</span>
-        <span style="color:var(--text-dim);font-size:11px;">相似度 ${ev.similarity}%</span>
+        <span style="color:var(--text-dim);font-size:11px;">相似度 ${ev.similarity.toFixed(2)}%</span>
       </div>`;
     }
 
@@ -517,7 +545,7 @@ class App {
       breakdownHTML += `
         <div class="score-item">
           <span class="item-name">${item.name}</span>
-          <span class="item-score" style="color:${color}">${item.score}/${item.max}</span>
+          <span class="item-score" style="color:${color}">${item.score.toFixed(2)}/${item.max}</span>
         </div>
       `;
     }
@@ -525,7 +553,7 @@ class App {
     scoreSection.innerHTML = `
       ${typeBadgeHTML}
       <div class="score-total">
-        <span class="score-value">${ev.totalScore}</span>
+        <span class="score-value">${ev.totalScore.toFixed(2)}</span>
         <span class="score-max">/ ${ev.maxScore}</span>
         <span class="score-grade ${ev.gradeClass}">${ev.grade}</span>
       </div>
@@ -647,7 +675,7 @@ class App {
         : `<span class="lib-placeholder">🧊</span>`;
 
       const scoreHTML = m.scores
-        ? `<div class="lib-score">${m.scores.totalScore}/100</div>`
+        ? `<div class="lib-score">${m.scores.totalScore.toFixed(2)}/100</div>`
         : '';
 
       const charBadgeHTML = m.meta?.isCharacterModel
@@ -698,10 +726,10 @@ class App {
         <div class="pk-comp-item">
           <span class="pk-comp-label">${dim.name}</span>
           <div class="pk-comp-bar">
-            <div class="pk-comp-fill a" style="width:${dim.winnerPct}%"><span class="pk-comp-value">${dim.winner}/${dim.max}</span></div>
+            <div class="pk-comp-fill a" style="width:${dim.winnerPct}%"><span class="pk-comp-value">${dim.winner.toFixed(2)}</span></div>
           </div>
           <div class="pk-comp-bar">
-            <div class="pk-comp-fill b" style="width:${dim.runnerPct}%"><span class="pk-comp-value">${dim.runner}/${dim.max}</span></div>
+            <div class="pk-comp-fill b" style="width:${dim.runnerPct}%"><span class="pk-comp-value">${dim.runner.toFixed(2)}</span></div>
           </div>
         </div>
       `;
@@ -717,13 +745,13 @@ class App {
           ${pkData.winner.result.totalScore > pkData.runner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
           <div class="pk-model-name">${pkData.winner.name}</div>
           ${winnerType}
-          <div class="pk-model-score">${pkData.winner.result.totalScore}<span style="font-size:18px;color:#8b90a0">/100</span></div>
+          <div class="pk-model-score">${pkData.winner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
         </div>
         <div class="pk-card">
           ${pkData.runner.result.totalScore > pkData.winner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
           <div class="pk-model-name">${pkData.runner.name}</div>
           ${runnerType}
-          <div class="pk-model-score">${pkData.runner.result.totalScore}<span style="font-size:18px;color:#8b90a0">/100</span></div>
+          <div class="pk-model-score">${pkData.runner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
         </div>
       </div>
       <div style="margin-top:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;">
