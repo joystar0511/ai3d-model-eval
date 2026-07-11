@@ -35,9 +35,12 @@ class CloudStorage {
         textureCount: modelData.meta?.textureCount || 0,
         fileName: modelData.meta?.fileName || '',
         fileSize: modelData.meta?.fileSize || 0,
+        fileType: modelData.meta?.fileType || '',
         isCharacterModel: modelData.meta?.isCharacterModel || false,
         similarity: modelData.meta?.similarity || 0,
       },
+      modelFile: modelData.modelFile || null,
+      textureFiles: modelData.textureFiles || {},
       sharedAt: new Date().toISOString(),
       sharedBy: this._getUserTag(),
     };
@@ -133,10 +136,29 @@ class CloudStorage {
     try {
       localStorage.setItem(SHARED_KEY, JSON.stringify(list));
     } catch (e) {
-      // Storage might be full (thumbnail too large)
-      // Try saving without thumbnails
-      const lite = list.map(m => ({ ...m, thumbnail: null }));
-      localStorage.setItem(SHARED_KEY, JSON.stringify(lite));
+      // Storage might be full — progressively strip large data
+      // Level 1: strip texture files data
+      try {
+        const lite1 = list.map(m => ({ ...m, textureFiles: {} }));
+        localStorage.setItem(SHARED_KEY, JSON.stringify(lite1));
+        console.warn('Storage full: saved without texture file data');
+        return;
+      } catch (e2) {}
+      // Level 2: also strip model file data
+      try {
+        const lite2 = list.map(m => ({ ...m, modelFile: null, textureFiles: {} }));
+        localStorage.setItem(SHARED_KEY, JSON.stringify(lite2));
+        console.warn('Storage full: saved without model/texture file data');
+        return;
+      } catch (e3) {}
+      // Level 3: also strip thumbnails
+      try {
+        const lite3 = list.map(m => ({ ...m, modelFile: null, textureFiles: {}, thumbnail: null }));
+        localStorage.setItem(SHARED_KEY, JSON.stringify(lite3));
+        console.warn('Storage full: saved without file data and thumbnails');
+      } catch (e4) {
+        console.error('Storage completely full, cannot save');
+      }
     }
   }
 
