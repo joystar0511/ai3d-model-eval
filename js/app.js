@@ -577,8 +577,46 @@ class App {
 
   _renderNotesAndShare(model) {
     const notesSection = document.getElementById(`notes-${model.id}`);
+
+    // Build recommendation tags
+    let recTagsHTML = '';
+    const ev = model.evaluation;
+    if (ev) {
+      const tags = [];
+
+      // Purple "不可打印" tag if unmerged vertices exist
+      if (ev.unmergedPairs > 0) {
+        tags.push({ label: '不可打印', color: 'purple', detail: `${ev.unmergedPairs} 组未合并点` });
+      } else {
+        tags.push({ label: '可打印', color: 'green', detail: '无未合并点' });
+      }
+
+      // Character model tag
+      if (ev.isCharacterModel) {
+        tags.push({ label: '角色模型', color: 'gold', detail: `相似度 ${ev.similarity.toFixed(1)}%` });
+      }
+
+      // Score-based tag
+      if (ev.totalScore >= 80) {
+        tags.push({ label: '高质量', color: 'blue', detail: `${ev.totalScore.toFixed(1)}分` });
+      } else if (ev.totalScore < 60) {
+        tags.push({ label: '需优化', color: 'red', detail: `${ev.totalScore.toFixed(1)}分` });
+      }
+
+      recTagsHTML = tags.map(t => `
+        <span class="rec-tag rec-tag-${t.color}" title="${t.detail}">
+          ${t.label}
+          <span class="rec-tag-detail">${t.detail}</span>
+        </span>
+      `).join('');
+    }
+
     notesSection.innerHTML = `
       <textarea placeholder="输入备注..." data-id="${model.id}">${model.notes}</textarea>
+      <div class="recommendation-section">
+        <div class="rec-label">模型用途推荐</div>
+        <div class="rec-tags">${recTagsHTML}</div>
+      </div>
       <button class="btn btn-green btn-sm share-btn" data-id="${model.id}">
         <span>Share to Cloud</span>
       </button>
