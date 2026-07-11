@@ -865,6 +865,7 @@ a:hover { text-decoration: underline; }
 .toast.visible { transform: translateX(-50%) translateY(0); }
 .toast.error { border-color: var(--red); }
 .toast.success { border-color: var(--green); }
+.toast.warn { border-color: var(--gold); }
 
 /* ===== Scoring Page ===== */
 .scoring-page, .library-page {
