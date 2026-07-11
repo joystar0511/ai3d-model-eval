@@ -1,9 +1,13 @@
 /**
  * App - Main application controller for AI 3D Topology Low-Poly Model Evaluation Tool
  *
- * Models and textures are uploaded separately:
+ * Models and textures uploaded separately:
  * - Model file: OBJ, FBX, GLTF/GLB, STL, PLY
  * - Texture files: BaseColor, NormalMap, MetallicMap, Roughness, Emission
+ *
+ * Standard human body model: ADMIN ONLY (URL ?admin=1)
+ * Global display mode toolbar: applies to all user models simultaneously
+ * Model Library: displayed at bottom 1/3 of page
  */
 
 import { ModelViewer } from './viewer.js';
@@ -22,11 +26,45 @@ class App {
   constructor() {
     this.models = [];
     this.isEvaluating = false;
+    this.globalMode = 'gray'; // Current global display mode
+
+    // Standard human body model reference (admin only)
+    this.standardModel = {
+      file: null,
+      viewer: null,
+      fingerprint: null,
+      ringLineData: null,
+    };
+
+    // Admin mode detection
+    this.isAdmin = this._detectAdminMode();
+
     this._initDOM();
     this._bindEvents();
+    this._loadLibrary();
+  }
+
+  /** Detect admin mode from URL parameter: ?admin=1 or ?admin=true */
+  _detectAdminMode() {
+    const params = new URLSearchParams(window.location.search);
+    return params.get('admin') === '1' || params.get('admin') === 'true';
   }
 
   _initDOM() {
+    // Standard model elements (admin only)
+    if (this.isAdmin) {
+      const section = document.getElementById('standardModelSection');
+      if (section) section.style.display = 'block';
+    }
+
+    this.standardUploadZone = document.getElementById('standardUploadZone');
+    this.standardFileInput = document.getElementById('standardFileInput');
+    this.standardPreviewBox = document.getElementById('standardPreviewBox');
+    this.standardPreviewViewer = document.getElementById('standardPreviewViewer');
+    this.standardPreviewInfo = document.getElementById('standardPreviewInfo');
+    this.standardRemoveBtn = document.getElementById('standardRemoveBtn');
+
+    // Main upload elements
     this.uploadArea = document.getElementById('uploadArea');
     this.initialUpload = document.getElementById('initialUpload');
     this.splitButtons = document.getElementById('splitButtons');
@@ -40,9 +78,44 @@ class App {
     this.progressBar = document.getElementById('progressBar');
     this.progressText = document.getElementById('progressText');
     this.toast = document.getElementById('toast');
+
+    // Global mode toolbar
+    this.globalModeToolbar = document.getElementById('globalModeToolbar');
+    this.globalModeBtns = document.querySelectorAll('.global-mode-btn');
+
+    // Library elements
+    this.libraryGrid = document.getElementById('libraryGrid');
+    this.libraryRefreshBtn = document.getElementById('libraryRefreshBtn');
   }
 
   _bindEvents() {
+    // Standard model upload (admin)
+    if (this.isAdmin) {
+      this.standardUploadZone.addEventListener('click', () => this.standardFileInput.click());
+      this.standardUploadZone.addEventListener('dragover', e => {
+        e.preventDefault();
+        this.standardUploadZone.classList.add('dragover');
+      });
+      this.standardUploadZone.addEventListener('dragleave', e => {
+        e.preventDefault();
+        this.standardUploadZone.classList.remove('dragover');
+      });
+      this.standardUploadZone.addEventListener('drop', e => {
+        e.preventDefault();
+        this.standardUploadZone.classList.remove('dragover');
+        if (e.dataTransfer.files.length > 0) {
+          this._handleStandardModel(e.dataTransfer.files[0]);
+        }
+      });
+      this.standardFileInput.addEventListener('change', e => {
+        if (e.target.files.length > 0) {
+          this._handleStandardModel(e.target.files[0]);
+        }
+      });
+      this.standardRemoveBtn.addEventListener('click', () => this._removeStandardModel());
+    }
+
+    // Main model upload
     this.initialUpload.addEventListener('click', () => this.fileInput.click());
     this.initialUpload.addEventListener('dragover', e => this._onDragOver(e));
     this.initialUpload.addEventListener('dragleave', e => this._onDragLeave(e));
@@ -52,7 +125,101 @@ class App {
     this.btnAddMore.addEventListener('click', () => this.fileInputAdd.click());
     this.btnEvaluate.addEventListener('click', () => this._startEvaluation());
     this.fileInputAdd.addEventListener('change', e => this._handleFiles(e.target.files));
+
+    // Global display mode toolbar
+    this.globalModeBtns.forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        this._setGlobalMode(mode);
+      });
+    });
+
+    // Library refresh
+    this.libraryRefreshBtn.addEventListener('click', () => this._refreshLibrary());
   }
+
+  // === Global Display Mode ===
+
+  /** Set display mode for ALL user models simultaneously */
+  _setGlobalMode(mode) {
+    this.globalMode = mode;
+
+    // Update toolbar button states
+    this.globalModeBtns.forEach(btn => {
+      btn.classList.toggle('active', btn.dataset.mode === mode);
+    });
+
+    // Apply to all user models
+    for (const model of this.models) {
+      if (model.viewer) {
+        model.viewer.setMode(mode);
+      }
+    }
+  }
+
+  // === Standard Human Model Handling (Admin Only) ===
+
+  async _handleStandardModel(file) {
+    const ext = file.name.split('.').pop().toLowerCase();
+    const supported = ['obj', 'fbx', 'gltf', 'glb', 'stl', 'ply'];
+    if (!supported.includes(ext)) {
+      this._showToast(`标准模型不支持格式: .${ext}`, 'error');
+      return;
+    }
+
+    if (this.standardModel.viewer) {
+      this.standardModel.viewer.dispose();
+    }
+
+    this.standardModel.file = file;
+    this.standardUploadZone.style.display = 'none';
+    this.standardPreviewBox.style.display = 'block';
+
+    this.standardModel.viewer = new ModelViewer(this.standardPreviewViewer, file);
+
+    const waitForLoad = () => {
+      return new Promise(resolve => {
+        let attempts = 0;
+        const check = () => {
+          const geoData = this.standardModel.viewer.getGeometryData();
+          if (geoData) {
+            this.standardModel.fingerprint = this.standardModel.viewer.getShapeFingerprint();
+            this.standardModel.ringLineData = this.standardModel.viewer.getRingLineData();
+            this.standardPreviewInfo.textContent = `顶点: ${geoData.totalVertices.toLocaleString()} | 面: ${geoData.totalFaces.toLocaleString()} | ✅ 已就绪`;
+            resolve();
+          } else if (attempts < 60) {
+            attempts++;
+            setTimeout(check, 200);
+          } else {
+            this.standardPreviewInfo.textContent = '⚠️ 模型加载超时';
+            resolve();
+          }
+        };
+        check();
+      });
+    };
+
+    await waitForLoad();
+    this._showToast('标准人体模型已加载，评测时将参照此模型进行对比分析', 'success');
+  }
+
+  _removeStandardModel() {
+    if (this.standardModel.viewer) {
+      this.standardModel.viewer.dispose();
+    }
+    this.standardModel = {
+      file: null,
+      viewer: null,
+      fingerprint: null,
+      ringLineData: null,
+    };
+    this.standardPreviewBox.style.display = 'none';
+    this.standardUploadZone.style.display = 'block';
+    this.standardFileInput.value = '';
+    this._showToast('标准人体模型已移除', 'success');
+  }
+
+  // === Main Model Handling ===
 
   _onDragOver(e) {
     e.preventDefault();
@@ -125,12 +292,6 @@ class App {
         <button class="card-remove" data-id="${model.id}" title="移除">&times;</button>
       </div>
       <div class="viewer-container" id="viewer-${model.id}"></div>
-      <div class="viewer-modes" id="modes-${model.id}">
-        <button class="viewer-mode-btn active" data-mode="gray">灰模</button>
-        <button class="viewer-mode-btn" data-mode="wireframe">线框</button>
-        <button class="viewer-mode-btn" data-mode="color">颜色贴图</button>
-        <button class="viewer-mode-btn" data-mode="material">材质灯光</button>
-      </div>
 
       <!-- Texture Upload Section -->
       <div class="texture-section">
@@ -159,21 +320,12 @@ class App {
 
     this.modelGrid.appendChild(card);
 
-    // Initialize viewer
     const viewerContainer = card.querySelector(`#viewer-${model.id}`);
     model.viewer = new ModelViewer(viewerContainer, model.file);
 
-    // Bind mode buttons
-    const modeButtons = card.querySelectorAll('.viewer-mode-btn');
-    modeButtons.forEach(btn => {
-      btn.addEventListener('click', () => {
-        modeButtons.forEach(b => b.classList.remove('active'));
-        btn.classList.add('active');
-        model.viewer.setMode(btn.dataset.mode);
-      });
-    });
+    // Apply current global mode to new model
+    model.viewer.setMode(this.globalMode);
 
-    // Bind name input
     const nameInput = card.querySelector('.model-name-input');
     nameInput.addEventListener('input', e => {
       model.name = e.target.value.trim();
@@ -181,7 +333,6 @@ class App {
     model.name = this._guessName(model.file.name);
     nameInput.value = model.name;
 
-    // Bind texture upload slots
     card.querySelectorAll('.texture-slot-btn').forEach(btn => {
       btn.addEventListener('click', () => {
         const fileInput = card.querySelector(`.texture-file-input[data-key="${btn.dataset.key}"]`);
@@ -197,7 +348,6 @@ class App {
       });
     });
 
-    // Bind remove button
     card.querySelector('.card-remove').addEventListener('click', () => {
       this._removeModel(model.id);
     });
@@ -209,7 +359,6 @@ class App {
 
     model.textureFiles[textureKey] = file;
 
-    // Update status display
     const statusEl = document.getElementById(`tex-status-${modelId}-${textureKey}`);
     if (statusEl) {
       const fileName = file.name.length > 15 ? file.name.slice(0, 12) + '...' : file.name;
@@ -217,17 +366,14 @@ class App {
       statusEl.classList.add('uploaded');
     }
 
-    // Update slot visual
     const slotEl = document.querySelector(`.texture-slot[data-model="${modelId}"][data-key="${textureKey}"]`);
     if (slotEl) slotEl.classList.add('has-texture');
 
-    // Update viewer textures
     await model.viewer.setTextures(model.textureFiles);
 
-    // Auto-switch to material mode if user uploads textures
-    if (textureKey === 'baseColor') {
-      const colorBtn = document.querySelector(`#modes-${modelId} .viewer-mode-btn[data-mode="color"]`);
-      if (colorBtn) colorBtn.click();
+    // If user uploaded a color map and current mode is 'color', refresh display
+    if (textureKey === 'baseColor' && this.globalMode === 'color') {
+      model.viewer.setMode('color');
     }
 
     this._showToast(`${TEXTURE_SLOTS.find(s => s.key === textureKey).label} 已加载`, 'success');
@@ -261,10 +407,12 @@ class App {
       this.initialUpload.style.display = 'none';
       this.splitButtons.style.display = 'flex';
       this.modelGrid.style.display = 'grid';
+      this.globalModeToolbar.classList.add('visible');
     } else {
       this.initialUpload.style.display = 'block';
       this.splitButtons.style.display = 'none';
       this.modelGrid.style.display = 'none';
+      this.globalModeToolbar.classList.remove('visible');
     }
   }
 
@@ -286,6 +434,8 @@ class App {
     if (this.isEvaluating) return;
     this.isEvaluating = true;
 
+    const hasStandardModel = this.standardModel.fingerprint !== null;
+
     this.progressOverlay.classList.add('visible');
     this.progressBar.style.width = '0%';
     this.progressText.textContent = '正在初始化AI分析引擎...';
@@ -302,10 +452,24 @@ class App {
       const geoData = model.viewer.getGeometryData();
       const texInfo = model.viewer.getTextureInfo();
 
-      const result = await ModelEvaluator.evaluate(geoData, texInfo, (progress) => {
-        const overall = Math.round(((currentStep + progress / 100 * DIMENSIONS.length) / totalSteps) * 100);
-        this.progressBar.style.width = `${overall}%`;
-      });
+      const userFingerprint = model.viewer.getShapeFingerprint();
+      const userRingLineData = model.viewer.getRingLineData();
+
+      const standardModelRef = hasStandardModel ? {
+        fingerprint: this.standardModel.fingerprint,
+        ringLineData: this.standardModel.ringLineData,
+      } : null;
+
+      const result = await ModelEvaluator.evaluate(
+        geoData, texInfo,
+        standardModelRef,
+        userFingerprint,
+        userRingLineData,
+        (progress) => {
+          const overall = Math.round(((currentStep + progress / 100 * DIMENSIONS.length) / totalSteps) * 100);
+          this.progressBar.style.width = `${overall}%`;
+        }
+      );
 
       model.evaluation = result;
       currentStep += DIMENSIONS.length;
@@ -326,12 +490,26 @@ class App {
       this._renderPK();
     }
 
-    this._showToast('评测完成！所有模型评分已生成', 'success');
+    const charCount = this.models.filter(m => m.evaluation?.isCharacterModel).length;
+    if (hasStandardModel && charCount > 0) {
+      this._showToast(`评测完成！${charCount} 个模型被识别为角色模型。所有模型评分已生成`, 'success');
+    } else {
+      this._showToast('评测完成！所有模型评分已生成', 'success');
+    }
   }
 
   _renderScore(model) {
     const scoreSection = document.getElementById(`score-${model.id}`);
     const ev = model.evaluation;
+
+    let typeBadgeHTML = '';
+    if (ev.isCharacterModel) {
+      typeBadgeHTML = `<div style="display:inline-flex;align-items:center;gap:6px;padding:4px 12px;background:rgba(251,191,36,0.15);border:1px solid rgba(251,191,36,0.3);border-radius:6px;font-size:12px;margin-bottom:12px;">
+        <span>👤</span>
+        <span style="color:var(--gold);font-weight:600;">角色模型</span>
+        <span style="color:var(--text-dim);font-size:11px;">相似度 ${ev.similarity}%</span>
+      </div>`;
+    }
 
     let breakdownHTML = '';
     for (const item of ev.breakdown) {
@@ -345,6 +523,7 @@ class App {
     }
 
     scoreSection.innerHTML = `
+      ${typeBadgeHTML}
       <div class="score-total">
         <span class="score-value">${ev.totalScore}</span>
         <span class="score-max">/ ${ev.maxScore}</span>
@@ -398,6 +577,8 @@ class App {
           textureCount: [texInfo.hasColorMap, texInfo.hasNormalMap, texInfo.hasMetalnessMap, texInfo.hasRoughnessMap, texInfo.hasEmissionMap].filter(Boolean).length,
           fileName: model.file.name,
           fileSize: model.file.size,
+          isCharacterModel: model.evaluation?.isCharacterModel || false,
+          similarity: model.evaluation?.similarity || 0,
         },
       };
 
@@ -410,6 +591,9 @@ class App {
 
       btn.innerHTML = '<span>已分享</span>';
       this._showToast(`模型 "${model.name}" 已分享到云端库`, 'success');
+
+      // Refresh library display
+      this._loadLibrary();
     } catch (e) {
       console.error('Share failed:', e);
       btn.disabled = false;
@@ -417,6 +601,87 @@ class App {
       this._showToast('分享失败，请重试', 'error');
     }
   }
+
+  // === Model Library ===
+
+  _loadLibrary() {
+    const allModels = CloudStorage.getAllModels();
+    this._renderLibrary(allModels);
+  }
+
+  _refreshLibrary() {
+    const allModels = CloudStorage.getAllModels();
+    this._renderLibrary(allModels, true); // randomize
+  }
+
+  _renderLibrary(allModels, randomize = false) {
+    this.libraryGrid.innerHTML = '';
+
+    if (!allModels || allModels.length === 0) {
+      this.libraryGrid.innerHTML = `
+        <div class="library-empty-state">
+          <span class="empty-icon">📭</span>
+          <p>模型库暂无模型</p>
+          <p class="empty-hint">评测完成后可将模型分享到此处</p>
+        </div>
+      `;
+      return;
+    }
+
+    // Select 4 models to display (random or first 4)
+    let displayModels;
+    if (randomize && allModels.length > 4) {
+      // Shuffle and pick 4
+      const shuffled = [...allModels].sort(() => Math.random() - 0.5);
+      displayModels = shuffled.slice(0, 4);
+    } else {
+      displayModels = allModels.slice(0, 4);
+    }
+
+    for (const m of displayModels) {
+      const card = document.createElement('div');
+      card.className = 'library-card';
+
+      const thumbnailHTML = m.thumbnail
+        ? `<img src="${m.thumbnail}" alt="${m.name}" />`
+        : `<span class="lib-placeholder">🧊</span>`;
+
+      const scoreHTML = m.scores
+        ? `<div class="lib-score">${m.scores.totalScore}/100</div>`
+        : '';
+
+      const charBadgeHTML = m.meta?.isCharacterModel
+        ? `<span class="lib-char-badge">👤 角色模型</span>`
+        : '';
+
+      const notesHTML = m.notes
+        ? `<div class="lib-notes">${m.notes.length > 60 ? m.notes.slice(0, 60) + '...' : m.notes}</div>`
+        : '';
+
+      const metaHTML = `
+        <div class="lib-meta">
+          ${m.meta?.vertices ? `顶点: ${m.meta.vertices.toLocaleString()}` : ''}
+          ${m.meta?.faces ? ` | 面: ${m.meta.faces.toLocaleString()}` : ''}
+          ${m.meta?.textureCount ? ` | 贴图: ${m.meta.textureCount}` : ''}
+          ${charBadgeHTML}
+        </div>
+      `;
+
+      card.innerHTML = `
+        <div class="lib-preview">${thumbnailHTML}</div>
+        <div class="lib-info">
+          <div class="lib-name">${m.name || '未命名'}</div>
+          ${scoreHTML}
+          ${notesHTML}
+          ${metaHTML}
+        </div>
+      `;
+
+      this.libraryGrid.appendChild(card);
+    }
+  }
+
+  // === PK Section ===
 
   _renderPK() {
     const evaluatedModels = this.models.filter(m => m.evaluation);
@@ -442,17 +707,22 @@ class App {
       `;
     }
 
+    const winnerType = pkData.winnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
+    const runnerType = pkData.runnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
+
     this.pkSection.innerHTML = `
       <h2>Model PK - 对比评测</h2>
       <div class="pk-container">
         <div class="pk-card">
           ${pkData.winner.result.totalScore > pkData.runner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
           <div class="pk-model-name">${pkData.winner.name}</div>
+          ${winnerType}
           <div class="pk-model-score">${pkData.winner.result.totalScore}<span style="font-size:18px;color:#8b90a0">/100</span></div>
         </div>
         <div class="pk-card">
           ${pkData.runner.result.totalScore > pkData.winner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
           <div class="pk-model-name">${pkData.runner.name}</div>
+          ${runnerType}
           <div class="pk-model-score">${pkData.runner.result.totalScore}<span style="font-size:18px;color:#8b90a0">/100</span></div>
         </div>
       </div>
@@ -472,6 +742,8 @@ class App {
     `;
     this.pkSection.classList.add('visible');
   }
+
+  // === Utility ===
 
   _showToast(msg, type = '') {
     this.toast.textContent = msg;
