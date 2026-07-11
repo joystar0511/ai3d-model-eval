@@ -18,7 +18,6 @@
  * Only final scores and qualitative analysis are shown.
  */
 
-// Raw max scores from the criteria table (total = 120)
 const RAW_MAX = {
   hiddenFaces: 10,
   brokenFaces: 10,
@@ -35,51 +34,37 @@ const RAW_MAX = {
 
 const RAW_TOTAL = Object.values(RAW_MAX).reduce((a, b) => a + b, 0); // 120
 
-// Dimension display info
 const DIMENSIONS = [
-  { key: 'hiddenFaces',        name: '隐藏面',         max: 10 },
-  { key: 'brokenFaces',        name: '破面',           max: 10 },
-  { key: 'overlappingVerts',   name: '重合点',         max: 10 },
-  { key: 'wireUniformity',     name: '布线均匀度',     max: 10 },
-  { key: 'riggability',        name: '可绑定程度',     max: 10 },
-  { key: 'uvUtilization',      name: 'UV利用度',       max: 20 },
-  { key: 'textureDetail',      name: '贴图细节与复杂性', max: 10 },
-  { key: 'textureColor',       name: '贴图色彩',       max: 10 },
-  { key: 'consistency',        name: '一致性与伪影',   max: 10 },
-  { key: 'materialRationality',name: '材质合理性',     max: 10 },
-  { key: 'normalMapQuality',   name: '法线贴图质量',   max: 10 },
+  { key: 'hiddenFaces',        name: '隐藏面',           max: 10 },
+  { key: 'brokenFaces',        name: '破面',             max: 10 },
+  { key: 'overlappingVerts',   name: '重合点',           max: 10 },
+  { key: 'wireUniformity',     name: '布线均匀度',       max: 10 },
+  { key: 'riggability',        name: '可绑定程度',       max: 10 },
+  { key: 'uvUtilization',      name: 'UV利用度',         max: 20 },
+  { key: 'textureDetail',      name: '贴图细节与复杂性',  max: 10 },
+  { key: 'textureColor',       name: '贴图色彩',         max: 10 },
+  { key: 'consistency',        name: '一致性与伪影',     max: 10 },
+  { key: 'materialRationality',name: '材质合理性',       max: 10 },
+  { key: 'normalMapQuality',   name: '法线贴图质量',     max: 10 },
 ];
 
 class ModelEvaluator {
 
-  /**
-   * Evaluate a single model
-   * @param {Object} geometryData - from ModelViewer.getGeometryData()
-   * @param {Object} textureInfo - texture availability info
-   * @param {Function} onProgress - progress callback (0-100)
-   * @returns {Promise<Object>} evaluation result
-   */
   static async evaluate(geometryData, textureInfo, onProgress) {
     const steps = DIMENSIONS.length;
     const rawScores = {};
 
     for (let i = 0; i < DIMENSIONS.length; i++) {
       const dim = DIMENSIONS[i];
-      // Simulate async analysis with small delay
       await this._delay(200 + Math.random() * 300);
       rawScores[dim.key] = this._evaluateDimension(dim.key, geometryData, textureInfo);
       if (onProgress) onProgress(Math.round(((i + 1) / steps) * 100));
     }
 
-    // Compute raw total
     const rawTotal = Object.values(rawScores).reduce((a, b) => a + b, 0);
-    // Normalize to 100
     const normalizedTotal = Math.round((rawTotal / RAW_TOTAL) * 100);
-
-    // Generate qualitative analysis
     const analysis = this._generateAnalysis(rawScores, geometryData, textureInfo);
 
-    // Build score breakdown (normalized to each dimension's displayed max)
     const breakdown = DIMENSIONS.map(dim => ({
       name: dim.name,
       key: dim.key,
@@ -88,7 +73,6 @@ class ModelEvaluator {
       percentage: Math.round((rawScores[dim.key] / dim.max) * 100),
     }));
 
-    // Determine grade
     let grade, gradeClass;
     if (normalizedTotal >= 90) { grade = 'A'; gradeClass = 'grade-a'; }
     else if (normalizedTotal >= 75) { grade = 'B'; gradeClass = 'grade-b'; }
@@ -125,8 +109,7 @@ class ModelEvaluator {
     }
   }
 
-  // === Dimension evaluators ===
-  // Internal logic - NOT exposed to end users
+  // === Geometry evaluators ===
 
   static _evalHiddenFaces(geo) {
     const max = RAW_MAX.hiddenFaces;
@@ -138,7 +121,6 @@ class ModelEvaluator {
 
   static _evalBrokenFaces(geo) {
     const max = RAW_MAX.brokenFaces;
-    // Estimate broken faces via degenerate triangles (zero or near-zero area)
     let broken = 0;
     if (geo.edgeLengths) {
       for (let i = 0; i < geo.edgeLengths.length; i += 3) {
@@ -146,7 +128,6 @@ class ModelEvaluator {
         const b = geo.edgeLengths[i + 1] || 0;
         const c = geo.edgeLengths[i + 2] || 0;
         if (a < 1e-6 || b < 1e-6 || c < 1e-6) broken++;
-        // Triangle inequality check
         if (a + b < c * 0.999 || a + c < b * 0.999 || b + c < a * 0.999) broken++;
       }
     }
@@ -167,8 +148,6 @@ class ModelEvaluator {
     const avg = geo.avgEdgeLength;
     if (avg < 1e-8) return 0;
     const variance = geo.edgeLengthVariance;
-    const cv = Math.sqrt(variance) / avg; // coefficient of variation
-    // Type1: values > avg*1.3, Type2: values < avg
     let type1 = 0, type2 = 0;
     for (const len of geo.edgeLengths) {
       if (len > avg * 1.3) type1++;
@@ -182,14 +161,8 @@ class ModelEvaluator {
 
   static _evalRiggability(geo) {
     const max = RAW_MAX.riggability;
-    // Simplified: check if model looks like a character (vertex count in typical range)
     const vc = geo.totalVertices || 0;
-    if (vc < 500 || vc > 50000) {
-      // Likely not a character model - no deduction
-      return max;
-    }
-    // For character models, simulate joint analysis
-    // Use edge loop analysis proxy: coefficient of variation of edge lengths
+    if (vc < 500 || vc > 50000) return max;
     const cv = geo.edgeLengthVariance > 0
       ? Math.sqrt(geo.edgeLengthVariance) / Math.max(geo.avgEdgeLength, 1e-8)
       : 0;
@@ -200,15 +173,12 @@ class ModelEvaluator {
 
   static _evalUVUtilization(geo) {
     const max = RAW_MAX.uvUtilization;
-    if (!geo.hasUV) return max * 0.3; // No UV = low score
-    // Without actual UV data parsing, simulate based on model complexity
-    // More complex models tend to have better UV utilization
+    if (!geo.hasUV) return max * 0.3;
     const vc = geo.totalVertices || 0;
     let simulatedRatio;
     if (vc > 10000) simulatedRatio = 0.75 + Math.random() * 0.2;
     else if (vc > 2000) simulatedRatio = 0.65 + Math.random() * 0.25;
     else simulatedRatio = 0.50 + Math.random() * 0.30;
-
     if (simulatedRatio > 0.8) return max;
     if (simulatedRatio > 0.6) {
       const penalty = (0.8 - simulatedRatio) * 100;
@@ -217,32 +187,104 @@ class ModelEvaluator {
     return 0;
   }
 
+  // === Texture evaluators (use actual pixel data) ===
+
   static _evalTextureDetail(tex) {
     const max = RAW_MAX.textureDetail;
     if (!tex || !tex.hasColorMap) return max * 0.4;
-    // Simulate texture detail analysis
-    const detailScore = 0.6 + Math.random() * 0.4;
-    return Math.round(max * detailScore);
+
+    const imgData = tex.imageData?.baseColor;
+    if (!imgData) return Math.round(max * 0.7);
+
+    // Check for large flat color areas (low detail)
+    const { data, width, height } = imgData;
+    const totalPixels = width * height;
+    let flatAreaPixels = 0;
+    const blockSize = 4; // Check 4x4 blocks
+
+    for (let by = 0; by < height - blockSize; by += blockSize) {
+      for (let bx = 0; bx < width - blockSize; bx += blockSize) {
+        // Check variance within block
+        let rSum = 0, gSum = 0, bSum = 0;
+        const blockPixels = blockSize * blockSize;
+        for (let dy = 0; dy < blockSize; dy++) {
+          for (let dx = 0; dx < blockSize; dx++) {
+            const idx = ((by + dy) * width + (bx + dx)) * 4;
+            rSum += data[idx];
+            gSum += data[idx + 1];
+            bSum += data[idx + 2];
+          }
+        }
+        const rAvg = rSum / blockPixels;
+        const gAvg = gSum / blockPixels;
+        const bAvg = bSum / blockPixels;
+
+        let variance = 0;
+        for (let dy = 0; dy < blockSize; dy++) {
+          for (let dx = 0; dx < blockSize; dx++) {
+            const idx = ((by + dy) * width + (bx + dx)) * 4;
+            variance += Math.abs(data[idx] - rAvg);
+            variance += Math.abs(data[idx + 1] - gAvg);
+            variance += Math.abs(data[idx + 2] - bAvg);
+          }
+        }
+        variance /= (blockPixels * 3);
+
+        // If variance is very low, it's a flat color area
+        if (variance < 2) {
+          flatAreaPixels += blockPixels;
+        }
+      }
+    }
+
+    const flatRatio = flatAreaPixels / totalPixels;
+    // Penalty: each 1% of flat area = 1 point deduction
+    const penalty = Math.min(flatRatio * 100, max);
+    return Math.max(max - penalty, 0);
   }
 
   static _evalTextureColor(tex) {
     const max = RAW_MAX.textureColor;
     if (!tex || !tex.hasColorMap) return max * 0.4;
-    const colorScore = 0.65 + Math.random() * 0.35;
-    return Math.round(max * colorScore);
+
+    const imgData = tex.imageData?.baseColor;
+    if (!imgData) return Math.round(max * 0.7);
+
+    const { data, width, height } = imgData;
+    const totalPixels = width * height;
+    let badPixels = 0;
+
+    for (let i = 0; i < data.length; i += 4) {
+      const r = data[i];
+      const g = data[i + 1];
+      const b = data[i + 2];
+
+      // Convert to HSV
+      const [h, s, v] = this._rgbToHsv(r, g, b);
+
+      // Check for extreme values (HSV 0-255 scale)
+      // Brightness < 10 or > 245
+      // Saturation < 10
+      if (v < 10 || v > 245 || s < 10) {
+        badPixels++;
+      }
+    }
+
+    const badRatio = badPixels / totalPixels;
+    // Penalty: each 1% of bad pixels = 1 point deduction
+    const penalty = Math.min(badRatio * 100, max);
+    return Math.max(max - penalty, 0);
   }
 
   static _evalConsistency(geo, tex) {
     const max = RAW_MAX.consistency;
-    // Check geometric symmetry (simplified)
+    // Check geometric symmetry
     let symmetryScore = 0.7;
     if (geo.positions && geo.positions.length > 0) {
-      // Sample vertices and check x-symmetry
       const sampleSize = Math.min(100, geo.positions.length);
       let symmetric = 0;
       for (let i = 0; i < sampleSize; i++) {
         const p = geo.positions[i];
-        // Look for a mirrored point
         for (let j = 0; j < sampleSize; j++) {
           if (i === j) continue;
           const q = geo.positions[j];
@@ -254,39 +296,188 @@ class ModelEvaluator {
       }
       symmetryScore = symmetric / sampleSize;
     }
-    return Math.round(max * Math.min(symmetryScore + 0.2, 1));
+
+    // Also check texture color symmetry if BaseColor is available
+    let texSymmetry = 1.0;
+    const imgData = tex?.imageData?.baseColor;
+    if (imgData) {
+      const { data, width, height } = imgData;
+      let diffSum = 0;
+      let count = 0;
+      const halfW = Math.floor(width / 2);
+      const sampleStep = Math.max(1, Math.floor(height / 50));
+
+      for (let y = 0; y < height; y += sampleStep) {
+        for (let x = 0; x < halfW; x += 2) {
+          const leftIdx = (y * width + x) * 4;
+          const rightIdx = (y * width + (width - 1 - x)) * 4;
+          const dr = Math.abs(data[leftIdx] - data[rightIdx]);
+          const dg = Math.abs(data[leftIdx + 1] - data[rightIdx + 1]);
+          const db = Math.abs(data[leftIdx + 2] - data[rightIdx + 2]);
+          const diff = (dr + dg + db) / 3;
+          diffSum += diff;
+          count++;
+        }
+      }
+
+      if (count > 0) {
+        const avgDiff = diffSum / count;
+        // Deviation > 5 is considered a problem
+        if (avgDiff > 5) {
+          texSymmetry = Math.max(0, 1 - (avgDiff - 5) * 0.1);
+        }
+      }
+    }
+
+    const combinedScore = (symmetryScore * 0.5 + texSymmetry * 0.5);
+    return Math.round(max * Math.min(combinedScore + 0.2, 1));
   }
 
   static _evalMaterialRationality(tex) {
     const max = RAW_MAX.materialRationality;
     if (!tex) return max * 0.5;
-    let score = max * 0.6;
-    if (tex.hasMetalnessMap) score += max * 0.2;
-    if (tex.hasRoughnessMap) score += max * 0.2;
+
+    let score = max * 0.4; // Base score
+
+    const metalData = tex.imageData?.metallicMap;
+    const roughData = tex.imageData?.roughness;
+
+    if (metalData) {
+      // Check if metallic map has appropriate brightness (should be > 155 for metal areas)
+      const { data, width, height } = metalData;
+      let brightSum = 0;
+      let pixelCount = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        brightSum += data[i]; // Use red channel as brightness
+        pixelCount++;
+      }
+      const avgBrightness = brightSum / pixelCount;
+      if (avgBrightness >= 155) {
+        score += max * 0.3; // Good metallic map
+      } else {
+        // Deduct based on deviation from standard
+        const deviation = Math.abs(avgBrightness - 155);
+        const penalty = Math.min(deviation / 5, max * 0.2);
+        score += max * 0.3 - penalty;
+      }
+    }
+
+    if (roughData) {
+      // Check if roughness map has appropriate brightness (should be < 100 for smooth areas)
+      const { data, width, height } = roughData;
+      let brightSum = 0;
+      let pixelCount = 0;
+      for (let i = 0; i < data.length; i += 4) {
+        brightSum += data[i];
+        pixelCount++;
+      }
+      const avgBrightness = brightSum / pixelCount;
+      if (avgBrightness <= 100) {
+        score += max * 0.3; // Good roughness map
+      } else {
+        const deviation = Math.abs(avgBrightness - 100);
+        const penalty = Math.min(deviation / 5, max * 0.2);
+        score += max * 0.3 - penalty;
+      }
+    }
+
     return Math.min(Math.round(score), max);
   }
 
   static _evalNormalMapQuality(tex) {
     const max = RAW_MAX.normalMapQuality;
     if (!tex || !tex.hasNormalMap) return max * 0.3;
-    const qualityScore = 0.65 + Math.random() * 0.35;
-    return Math.round(max * qualityScore);
+
+    const normalData = tex.imageData?.normalMap;
+    const colorData = tex.imageData?.baseColor;
+
+    if (!normalData) return Math.round(max * 0.7);
+
+    let score = max * 0.6; // Base score for having a normal map
+
+    // Check normal map has proper blue-ish tint (standard tangent space normal maps)
+    const { data, width, height } = normalData;
+    let bSum = 0, pixelCount = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      bSum += data[i + 2]; // Blue channel
+      pixelCount++;
+    }
+    const avgBlue = bSum / pixelCount;
+
+    // Normal maps should have high blue channel (pointing up in tangent space)
+    if (avgBlue > 180) {
+      score += max * 0.2;
+    } else if (avgBlue > 128) {
+      score += max * 0.1;
+    }
+
+    // Check correspondence with BaseColor (bright areas should have convex normals)
+    if (colorData && colorData.width === normalData.width) {
+      let correspondCount = 0;
+      let checkedPixels = 0;
+      const minDim = Math.min(colorData.width * colorData.height, normalData.width * normalData.height);
+      const step = Math.max(1, Math.floor(minDim / 1000));
+
+      for (let i = 0; i < Math.min(colorData.data.length, normalData.data.length); i += 4 * step) {
+        const colorBrightness = (colorData.data[i] + colorData.data[i + 1] + colorData.data[i + 2]) / 3;
+        const normalB = normalData.data[i + 2];
+        // Bright color = convex = high blue channel
+        if ((colorBrightness > 128 && normalB > 128) || (colorBrightness <= 128 && normalB <= 128)) {
+          correspondCount++;
+        }
+        checkedPixels++;
+      }
+
+      if (checkedPixels > 0) {
+        const correspondRatio = correspondCount / checkedPixels;
+        if (correspondRatio > 0.7) {
+          score += max * 0.2;
+        } else {
+          score += max * 0.1;
+        }
+      }
+    }
+
+    return Math.min(Math.round(score), max);
   }
 
-  // === Analysis generation (user-facing) ===
+  // === Utility ===
+
+  static _rgbToHsv(r, g, b) {
+    r /= 255; g /= 255; b /= 255;
+    const max = Math.max(r, g, b);
+    const min = Math.min(r, g, b);
+    const d = max - min;
+    let h = 0;
+    if (d !== 0) {
+      if (max === r) h = ((g - b) / d) % 6;
+      else if (max === g) h = (b - r) / d + 2;
+      else h = (r - g) / d + 4;
+      h *= 60;
+      if (h < 0) h += 360;
+    }
+    const s = max === 0 ? 0 : (d / max) * 255;
+    const v = max * 255;
+    return [h, s, v];
+  }
+
+  // === Analysis generation ===
 
   static _generateAnalysis(scores, geo, tex) {
     const analyses = [];
     const vc = geo?.totalVertices || 0;
     const fc = geo?.totalFaces || 0;
 
-    // Overall summary
+    const texCount = [
+      tex?.hasColorMap, tex?.hasNormalMap, tex?.hasMetalnessMap,
+      tex?.hasRoughnessMap, tex?.hasEmissionMap
+    ].filter(Boolean).length;
+
     analyses.push({
       title: '整体概览',
-      content: `该模型包含 ${vc.toLocaleString()} 个顶点和 ${fc.toLocaleString()} 个面，${tex?.hasColorMap ? '包含贴图资源' : '未检测到贴图资源'}。`,
+      content: `该模型包含 ${vc.toLocaleString()} 个顶点和 ${fc.toLocaleString()} 个面，${texCount > 0 ? `包含 ${texCount} 张PBR贴图` : '未检测到贴图资源'}。`,
     });
 
-    // Topology analysis
     const topoScore = (scores.wireUniformity + scores.overlappingVerts + scores.hiddenFaces + scores.brokenFaces) / 4;
     if (topoScore >= 7) {
       analyses.push({ title: '拓扑结构', content: '模型布线均匀，拓扑结构清晰，无明显的结构缺陷。' });
@@ -296,7 +487,6 @@ class ModelEvaluator {
       analyses.push({ title: '拓扑结构', content: '模型拓扑存在较多问题，布线不够均匀，建议重新进行拓扑优化。' });
     }
 
-    // UV analysis
     const uvScore = scores.uvUtilization;
     if (uvScore >= 16) {
       analyses.push({ title: 'UV展开', content: 'UV利用率良好，UV壳在UV空间内分布合理。' });
@@ -306,7 +496,6 @@ class ModelEvaluator {
       analyses.push({ title: 'UV展开', content: 'UV利用率较低，建议重新进行UV展开以优化空间利用率。' });
     }
 
-    // Texture analysis
     if (tex?.hasColorMap) {
       const texScore = (scores.textureDetail + scores.textureColor + scores.consistency) / 3;
       if (texScore >= 7) {
@@ -318,7 +507,6 @@ class ModelEvaluator {
       }
     }
 
-    // Material analysis
     if (tex?.hasNormalMap || tex?.hasMetalnessMap || tex?.hasRoughnessMap) {
       const matScore = (scores.materialRationality + scores.normalMapQuality) / 2;
       if (matScore >= 7) {
@@ -336,12 +524,10 @@ class ModelEvaluator {
   static compareModels(results) {
     if (!results || results.length < 2) return null;
 
-    // Sort by total score descending
     const sorted = [...results].sort((a, b) => b.result.totalScore - a.result.totalScore);
     const winner = sorted[0];
     const runner = sorted[1];
 
-    // Compare each dimension
     const dimensionComparison = DIMENSIONS.map(dim => {
       const wScore = winner.result.breakdown.find(b => b.key === dim.key);
       const rScore = runner.result.breakdown.find(b => b.key === dim.key);
@@ -357,7 +543,6 @@ class ModelEvaluator {
       };
     });
 
-    // Find strengths and weaknesses
     const winnerStrengths = dimensionComparison.filter(d => d.winner > d.runner).map(d => d.name);
     const runnerStrengths = dimensionComparison.filter(d => d.runner > d.winner).map(d => d.name);
 
