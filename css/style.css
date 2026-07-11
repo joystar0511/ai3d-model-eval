@@ -1091,6 +1091,36 @@ a:hover { text-decoration: underline; }
   transform: translateY(0);
 }
 
+/* Download button on gallery cards */
+.gallery-download-btn {
+  position: absolute;
+  bottom: 12px;
+  right: 12px;
+  width: 36px;
+  height: 36px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: rgba(30, 30, 46, 0.85);
+  color: var(--text-dim);
+  font-size: 18px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all .2s;
+  z-index: 5;
+  backdrop-filter: blur(4px);
+}
+.gallery-download-btn:hover {
+  background: var(--blue);
+  color: #fff;
+  border-color: var(--blue);
+  transform: scale(1.1);
+}
+.library-card {
+  position: relative;
+}
+
 /* ===== Gallery Detail Overlay ===== */
 .gallery-detail-overlay {
   display: none;
