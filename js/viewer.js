@@ -1,7 +1,14 @@
 /**
  * ModelViewer - Three.js based 3D model preview component
  * Supports: OBJ, FBX, GLTF/GLB, STL, PLY
- * Preview modes: gray, wireframe, color, material (with directional light + maps)
+ * Preview modes: gray, wireframe, color, material (PBR with directional light + all maps)
+ *
+ * Textures are uploaded separately by the user:
+ *   - BaseColor (map)
+ *   - NormalMap (normalMap)
+ *   - MetallicMap (metalnessMap)
+ *   - Roughness (roughnessMap)
+ *   - Emission (emissiveMap)
  */
 
 import * as THREE from 'three';
@@ -18,9 +25,32 @@ class ModelViewer {
     this.file = file;
     this.mode = 'gray';
     this.mesh = null;
-    this.originalMaterials = [];
-    this.textures = { color: null, normal: null, metalness: null, roughness: null };
     this.geometryData = null;
+
+    // PBR textures - uploaded separately by user
+    this.textures = {
+      baseColor: null,   // THREE.Texture
+      normalMap: null,
+      metallicMap: null,
+      roughness: null,
+      emission: null,
+    };
+    // Texture file references (for evaluator)
+    this.textureFiles = {
+      baseColor: null,
+      normalMap: null,
+      metallicMap: null,
+      roughness: null,
+      emission: null,
+    };
+    // Texture image data (for pixel-level analysis)
+    this.textureImageData = {
+      baseColor: null,
+      normalMap: null,
+      metallicMap: null,
+      roughness: null,
+      emission: null,
+    };
 
     this._initThree();
     this._loadModel();
@@ -53,10 +83,15 @@ class ModelViewer {
     this.ambientLight = new THREE.AmbientLight(0xffffff, 0.4);
     this.scene.add(this.ambientLight);
 
-    // Directional light (used in material mode)
+    // Directional light (DirectLight - used in material mode)
     this.directionalLight = new THREE.DirectionalLight(0xffffff, 1.5);
     this.directionalLight.position.set(5, 8, 5);
     this.scene.add(this.directionalLight);
+
+    // Secondary fill light for better PBR rendering
+    this.fillLight = new THREE.DirectionalLight(0x8899ff, 0.3);
+    this.fillLight.position.set(-5, 3, -5);
+    this.scene.add(this.fillLight);
 
     // Grid helper
     this.gridHelper = new THREE.GridHelper(10, 20, 0x444466, 0x333344);
@@ -115,15 +150,10 @@ class ModelViewer {
   }
 
   _setupModel(object) {
-    // Collect all meshes
     const meshes = [];
     object.traverse(child => {
       if (child.isMesh) {
         meshes.push(child);
-        // Save original materials
-        this.originalMaterials.push({ mesh: child, material: child.material });
-        // Try to extract textures from material
-        this._extractTextures(child.material);
       }
     });
 
@@ -163,15 +193,82 @@ class ModelViewer {
     this.infoDiv.textContent = `顶点: ${totalVerts.toLocaleString()} | 面: ${totalFaces.toLocaleString()}`;
   }
 
-  _extractTextures(material) {
-    if (!material) return;
-    const mats = Array.isArray(material) ? material : [material];
-    for (const mat of mats) {
-      if (mat.map) this.textures.color = mat.map;
-      if (mat.normalMap) this.textures.normal = mat.normalMap;
-      if (mat.metalnessMap) this.textures.metalness = mat.metalnessMap;
-      if (mat.roughnessMap) this.textures.roughness = mat.roughnessMap;
+  /**
+   * Set/update PBR textures from user-uploaded files
+   * @param {Object} textureFiles - { baseColor, normalMap, metallicMap, roughness, emission }
+   */
+  async setTextures(textureFiles) {
+    const loader = new THREE.TextureLoader();
+
+    for (const [key, file] of Object.entries(textureFiles)) {
+      if (!file) {
+        this.textures[key] = null;
+        this.textureFiles[key] = null;
+        this.textureImageData[key] = null;
+        continue;
+      }
+
+      this.textureFiles[key] = file;
+
+      try {
+        const url = URL.createObjectURL(file);
+        const texture = await loader.loadAsync(url);
+        URL.revokeObjectURL(url);
+
+        // Color textures use SRGB, data textures use linear
+        if (key === 'baseColor' || key === 'emission') {
+          texture.colorSpace = THREE.SRGBColorSpace;
+        } else {
+          texture.colorSpace = THREE.NoColorSpace;
+        }
+        texture.flipY = false; // Standard for PBR textures
+
+        this.textures[key] = texture;
+
+        // Extract image data for evaluation
+        this._extractImageData(key, file);
+      } catch (e) {
+        console.error(`Failed to load texture ${key}:`, e);
+      }
     }
+
+    // Re-apply current mode to update materials
+    if (this.mesh) {
+      this.setMode(this.mode);
+    }
+  }
+
+  /**
+   * Extract pixel data from texture image for evaluation
+   */
+  async _extractImageData(key, file) {
+    try {
+      const img = await this._loadImage(file);
+      const canvas = document.createElement('canvas');
+      const maxSize = 512; // Downscale for analysis performance
+      const scale = Math.min(1, maxSize / Math.max(img.width, img.height));
+      canvas.width = Math.max(1, Math.round(img.width * scale));
+      canvas.height = Math.max(1, Math.round(img.height * scale));
+      const ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+      this.textureImageData[key] = {
+        data: imageData.data,
+        width: canvas.width,
+        height: canvas.height,
+      };
+    } catch (e) {
+      console.error(`Failed to extract image data for ${key}:`, e);
+    }
+  }
+
+  _loadImage(file) {
+    return new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => resolve(img);
+      img.onerror = reject;
+      img.src = URL.createObjectURL(file);
+    });
   }
 
   _collectGeometryData(meshes) {
@@ -181,6 +278,7 @@ class ModelViewer {
     const positions = [];
     const edgeLengths = [];
     const faceNormals = [];
+    let hasUV = false;
 
     for (const mesh of meshes) {
       const geo = mesh.geometry;
@@ -201,7 +299,7 @@ class ModelViewer {
       }
 
       // Faces (limit processing for performance)
-      const faceLimit = 50000; // max faces to process per mesh
+      const faceLimit = 50000;
       if (geo.index) {
         totalFaces += geo.index.count / 3;
         const idxLimit = Math.min(geo.index.count, faceLimit * 3);
@@ -239,25 +337,19 @@ class ModelViewer {
 
       // UV data
       if (geo.attributes.uv) {
-        this.geometryData = this.geometryData || {};
-        this.geometryData.hasUV = true;
+        hasUV = true;
       }
     }
 
     totalEdges = edgeLengths.length;
 
-    // Compute overlapping vertices (distance < 0.01m in original scale)
     const overlappingPairs = this._findOverlappingVertices(positions, 0.01);
-
-    // Compute hidden faces (faces whose normals point inward - simplified check)
     const hiddenFaces = this._findHiddenFaces(faceNormals);
 
-    // Compute edge length statistics
     const avgEdgeLength = edgeLengths.reduce((a, b) => a + b, 0) / Math.max(edgeLengths.length, 1);
     const edgeLengthVariance = edgeLengths.reduce((sum, len) => sum + Math.pow(len - avgEdgeLength, 2), 0) / Math.max(edgeLengths.length, 1);
 
     this.geometryData = {
-      ...this.geometryData,
       totalVertices,
       totalFaces,
       totalEdges,
@@ -268,16 +360,14 @@ class ModelViewer {
       hiddenFaces,
       avgEdgeLength,
       edgeLengthVariance,
-      hasUV: this.geometryData?.hasUV || false,
+      hasUV,
       meshes: meshes.length,
     };
   }
 
   _findOverlappingVertices(positions, threshold) {
     let count = 0;
-    // Limit check for large models to prevent browser freeze
     const maxCheck = Math.min(positions.length, 50000);
-    // Use spatial hashing for efficiency
     const grid = new Map();
     const cellSize = threshold;
     for (let i = 0; i < maxCheck; i++) {
@@ -285,7 +375,6 @@ class ModelViewer {
       const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)},${Math.floor(p.z / cellSize)}`;
       if (!grid.has(key)) grid.set(key, []);
       const cell = grid.get(key);
-      // Check this cell and neighbors
       for (let dx = -1; dx <= 1; dx++) {
         for (let dy = -1; dy <= 1; dy++) {
           for (let dz = -1; dz <= 1; dz++) {
@@ -307,14 +396,10 @@ class ModelViewer {
   }
 
   _findHiddenFaces(faceNormals) {
-    // Simplified: count faces whose normals point inward (dot product with centroid direction is negative)
     if (faceNormals.length === 0) return 0;
     let hidden = 0;
-    // Check if normals are consistently outward-facing by sampling
     const outwardCount = faceNormals.filter(n => n.z > 0).length;
     const inwardCount = faceNormals.length - outwardCount;
-    // If model is closed, roughly half should face each direction
-    // Hidden faces are those with zero area or degenerate
     return Math.min(inwardCount, Math.floor(faceNormals.length * 0.05));
   }
 
@@ -342,9 +427,10 @@ class ModelViewer {
           break;
 
         case 'color':
-          if (this.textures.color) {
+          // Show BaseColor map only
+          if (this.textures.baseColor) {
             child.material = new THREE.MeshStandardMaterial({
-              map: this.textures.color,
+              map: this.textures.baseColor,
               roughness: 0.8,
               metalness: 0.0,
             });
@@ -357,18 +443,48 @@ class ModelViewer {
           break;
 
         case 'material':
+          // Full PBR material with all maps + directional light
           const mat = new THREE.MeshStandardMaterial({
             roughness: 0.5,
             metalness: 0.5,
           });
-          if (this.textures.color) mat.map = this.textures.color;
-          if (this.textures.normal) mat.normalMap = this.textures.normal;
-          if (this.textures.metalness) mat.metalnessMap = this.textures.metalness;
-          if (this.textures.roughness) mat.roughnessMap = this.textures.roughness;
+
+          // BaseColor (diffuse/albedo map)
+          if (this.textures.baseColor) {
+            mat.map = this.textures.baseColor;
+          }
+
+          // Normal map
+          if (this.textures.normalMap) {
+            mat.normalMap = this.textures.normalMap;
+            mat.normalScale = new THREE.Vector2(1, 1);
+          }
+
+          // Metallic map
+          if (this.textures.metallicMap) {
+            mat.metalnessMap = this.textures.metallicMap;
+            mat.metalness = 1.0; // Use map to control metalness
+          }
+
+          // Roughness map
+          if (this.textures.roughness) {
+            mat.roughnessMap = this.textures.roughness;
+            mat.roughness = 1.0; // Use map to control roughness
+          }
+
+          // Emission map
+          if (this.textures.emission) {
+            mat.emissiveMap = this.textures.emission;
+            mat.emissive = new THREE.Color(0xffffff);
+            mat.emissiveIntensity = 1.0;
+          }
+
           child.material = mat;
-          // Increase directional light intensity for material mode
-          this.directionalLight.intensity = 2.0;
-          this.ambientLight.intensity = 0.3;
+
+          // Enhanced lighting for PBR material mode
+          this.directionalLight.intensity = 2.5;
+          this.ambientLight.intensity = 0.25;
+          this.fillLight.intensity = 0.4;
           break;
       }
     });
@@ -377,6 +493,7 @@ class ModelViewer {
     if (mode !== 'material') {
       this.directionalLight.intensity = 1.5;
       this.ambientLight.intensity = 0.4;
+      this.fillLight.intensity = 0.3;
     }
   }
 
@@ -411,7 +528,21 @@ class ModelViewer {
   }
 
   hasTextures() {
-    return !!this.textures.color;
+    return !!this.textures.baseColor;
+  }
+
+  /**
+   * Get texture info for evaluator
+   */
+  getTextureInfo() {
+    return {
+      hasColorMap: !!this.textures.baseColor,
+      hasNormalMap: !!this.textures.normalMap,
+      hasMetalnessMap: !!this.textures.metallicMap,
+      hasRoughnessMap: !!this.textures.roughness,
+      hasEmissionMap: !!this.textures.emission,
+      imageData: this.textureImageData,
+    };
   }
 
   captureThumbnail() {
