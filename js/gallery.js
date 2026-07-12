@@ -6,6 +6,7 @@
 
 import { CloudStorage } from './cloud.js';
 import { ModelEvaluator } from './evaluator.js';
+import { ModelViewer } from './viewer.js';
 
 class GalleryApp {
   constructor() {
@@ -18,6 +19,9 @@ class GalleryApp {
     // Admin state
     this.isAdmin = sessionStorage.getItem('ai3d_admin') === 'true';
     this.currentModels = [];
+
+    // Detail panel 3D viewer
+    this.detailViewer = null;
 
     this._bindEvents();
     this._updateAdminUI();
@@ -429,9 +433,15 @@ class GalleryApp {
 
   // === Detail Panel ===
 
-  _showDetail(model) {
+  async _showDetail(model) {
     const m = model;
     const ev = m.scores;
+
+    // Dispose previous viewer if exists
+    if (this.detailViewer) {
+      this.detailViewer.dispose();
+      this.detailViewer = null;
+    }
 
     const thumbnailHTML = m.thumbnail
       ? `<img src="${m.thumbnail}" alt="${m.name}" />`
@@ -483,7 +493,7 @@ class GalleryApp {
     // Recommendation tags (based on Excel criteria)
     let recTagsHTML = '';
     if (ev) {
-      const tags = ModelEvaluator.generateUsageTags(ev.breakdown);
+      const tags = ModelEvaluator.generateUsageTags(ev.breakdown, m.meta);
       recTagsHTML = tags.map(t => `
         <span class="rec-tag rec-tag-${t.color}">
           ${t.label}
@@ -515,7 +525,12 @@ class GalleryApp {
 
     this.detailContent.innerHTML = `
       <div class="detail-header">
-        <div class="detail-thumbnail">${thumbnailHTML}</div>
+        <div class="detail-thumbnail" id="detailViewerContainer">
+          <div class="detail-viewer-loading" style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;flex-direction:column;gap:8px;">
+            <div class="spinner" style="margin:0 auto;"></div>
+            <p style="font-size:12px;color:var(--text-dim);">加载3D预览中...</p>
+          </div>
+        </div>
         <div class="detail-title-area">
           <h2 class="detail-model-name">${m.name || '未命名'}</h2>
           ${typeBadgeHTML}
@@ -527,6 +542,22 @@ class GalleryApp {
         </div>
       </div>
 
+      <!-- Per-model display mode buttons -->
+      <div class="card-viewer-modes" style="margin-bottom:16px;">
+        <button class="card-mode-btn active" data-mode="gray" title="灰模显示">
+          <span>🔘</span> 灰模
+        </button>
+        <button class="card-mode-btn" data-mode="wireframe" title="线框显示">
+          <span>🔷</span> 线框
+        </button>
+        <button class="card-mode-btn" data-mode="color" title="颜色贴图">
+          <span>🎨</span> 颜色
+        </button>
+        <button class="card-mode-btn" data-mode="material" title="材质效果">
+          <span>💡</span> 材质
+        </button>
+      </div>
+
       ${recTagsHTML ? `<div class="detail-rec-tags"><div class="rec-label">模型用途推荐</div><div class="rec-tags">${recTagsHTML}</div></div>` : ''}
 
       ${ev?.breakdown ? `<div class="detail-breakdown"><h3>评分明细</h3>${breakdownHTML}</div>` : ''}
@@ -535,7 +566,7 @@ class GalleryApp {
 
       ${metaHTML ? `<div class="detail-meta-section"><h3>模型信息</h3>${metaHTML}</div>` : ''}
 
-      ${m.notes ? `<div class="detail-notes-section"><h3>备注</h3><div class="detail-notes-text">${m.notes}</div></div>` : ''}
+      ${m.notes ? `<div class="detail-notes-section"><h3>评论</h3><div class="detail-notes-text">${m.notes}</div></div>` : ''}
 
       ${adminDeleteHTML}
     `;
@@ -551,11 +582,124 @@ class GalleryApp {
       }
     }
 
+    // Bind mode buttons
+    this.detailContent.querySelectorAll('.card-mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.mode;
+        this.detailContent.querySelectorAll('.card-mode-btn').forEach(b => {
+          b.classList.toggle('active', b.dataset.mode === mode);
+        });
+        if (this.detailViewer) {
+          this.detailViewer.setMode(mode);
+        }
+      });
+    });
+
     this.detailOverlay.classList.add('visible');
     document.body.style.overflow = 'hidden';
+
+    // Asynchronously load 3D viewer
+    await this._loadDetailViewer(m);
+  }
+
+  /** Load 3D model into the detail panel viewer */
+  async _loadDetailViewer(m) {
+    const container = document.getElementById('detailViewerContainer');
+    if (!container) return;
+
+    try {
+      // Ensure we have the model file data
+      let hasModelFile = !!m.modelFile;
+      let texFiles = m.textureFiles || {};
+      let texEntries = Object.entries(texFiles).filter(([k, f]) => f && f.data);
+
+      // Fetch from Firebase if not available locally
+      if (!hasModelFile && texEntries.length === 0) {
+        const files = await CloudStorage.fetchModelFiles(m.id);
+        if (files.modelFile) {
+          m.modelFile = files.modelFile;
+          hasModelFile = true;
+        }
+        if (files.textureFiles) {
+          m.textureFiles = files.textureFiles;
+          texFiles = files.textureFiles;
+          texEntries = Object.entries(texFiles).filter(([k, f]) => f && f.data);
+        }
+      }
+
+      if (!hasModelFile) {
+        // Fall back to thumbnail
+        container.innerHTML = m.thumbnail
+          ? `<img src="${m.thumbnail}" alt="${m.name}" />`
+          : `<span class="lib-placeholder">🧊</span>`;
+        return;
+      }
+
+      // Convert data URL to File object
+      const modelFile = this._dataUrlToFile(m.modelFile, m.meta?.fileName || 'model.glb');
+
+      // Create viewer
+      this.detailViewer = new ModelViewer(container, modelFile);
+
+      // Wait for model to load
+      await new Promise(resolve => {
+        let attempts = 0;
+        const check = () => {
+          const geoData = this.detailViewer.getGeometryData();
+          if (geoData || attempts >= 50) {
+            resolve();
+          } else {
+            attempts++;
+            setTimeout(check, 200);
+          }
+        };
+        check();
+      });
+
+      // Load textures if available
+      if (texEntries.length > 0) {
+        const textureFiles = {};
+        for (const [key, texFile] of texEntries) {
+          textureFiles[key] = this._dataUrlToFile(texFile.data, texFile.name || `${key}.png`);
+        }
+        await this.detailViewer.setTextures(textureFiles);
+      }
+
+      // Apply default mode (gray)
+      this.detailViewer.setMode('gray');
+
+    } catch (e) {
+      console.error('Detail viewer load failed:', e);
+      container.innerHTML = m.thumbnail
+        ? `<img src="${m.thumbnail}" alt="${m.name}" />`
+        : `<span class="lib-placeholder">🧊</span>`;
+    }
+  }
+
+  /** Convert a data URL to a File object */
+  _dataUrlToFile(dataUrl, fileName) {
+    if (dataUrl instanceof Blob) return dataUrl;
+    if (typeof dataUrl !== 'string') return new Blob([dataUrl]);
+    const parts = dataUrl.split(',');
+    const meta = parts[0];
+    const base64Data = parts[1] || parts[0];
+    const mimeMatch = meta.match(/data:(.*?);base64/);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+    const byteString = atob(base64Data);
+    const bytes = new Uint8Array(byteString.length);
+    for (let i = 0; i < byteString.length; i++) {
+      bytes[i] = byteString.charCodeAt(i);
+    }
+    const blob = new Blob([bytes], { type: mime });
+    return new File([blob], fileName, { type: mime });
   }
 
   _closeDetail() {
+    // Dispose 3D viewer if exists
+    if (this.detailViewer) {
+      this.detailViewer.dispose();
+      this.detailViewer = null;
+    }
     this.detailOverlay.classList.remove('visible');
     document.body.style.overflow = '';
   }
