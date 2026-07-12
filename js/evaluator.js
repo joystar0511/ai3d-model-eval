@@ -1109,11 +1109,11 @@ class ModelEvaluator {
   /**
    * Generate usage recommendation tags based on evaluation scores.
    *
-   * Tag criteria (from Excel spec):
-   * - 次世代游戏: 材质合理性>6, 模型光滑度>8, UV合理性>9, 法线贴图质量>8, 其他项>3
+   * Tag criteria (from Excel spec, UV合理性 score is ignored in all checks):
+   * - 次世代游戏: 材质合理性>6, 模型光滑度>7, 法线贴图质量>8, 其他项>3
    * - 手绘游戏: 贴图细节与复杂性>8, 其他项>3
-   * - 3D打印: 模型光滑度>9, 其他项>3
-   * - 影视动画: 所有项>9
+   * - 3D打印: 模型光滑度>7, 破面=10, 其他项>3
+   * - 影视动画: 其他项>9
    * - 高模: 面数>30000
    * - 简模: 面数<2000
    *
@@ -1147,30 +1147,29 @@ class ModelEvaluator {
 
     const tags = [];
 
-    // 次世代游戏: 材质合理性>6, 模型光滑度>7, 法线贴图质量>8, 其他项>3
+    // 次世代游戏: 材质合理性>6, 模型光滑度>7, 法线贴图质量>8, 其他项>3 (忽略UV合理性)
     if (scores.materialRationality > 6 &&
         scores.modelSmoothness > 7 &&
         scores.normalMapQuality > 8 &&
-        checkOthers(['materialRationality', 'modelSmoothness', 'normalMapQuality'], 3)) {
+        checkOthers(['materialRationality', 'modelSmoothness', 'normalMapQuality', 'uvUtilization'], 3)) {
       tags.push({ label: '次世代游戏', color: 'blue', description: '可以用作次世代游戏模型，直接导入unity或虚幻等引擎作为游戏资产' });
     }
 
-    // 手绘游戏: 贴图细节与复杂性>8, 其他项>3
+    // 手绘游戏: 贴图细节与复杂性>8, 其他项>3 (忽略UV合理性)
     if (scores.textureDetail > 8 &&
-        checkOthers(['textureDetail'], 3)) {
+        checkOthers(['textureDetail', 'uvUtilization'], 3)) {
       tags.push({ label: '手绘游戏', color: 'green', description: '可以用作手绘游戏资产，常见于风格化手绘游戏或小游戏' });
     }
 
-    // 3D打印: 模型光滑度>7, 破面=10, 其他项>3
+    // 3D打印: 模型光滑度>7, 破面=10, 其他项>3 (忽略UV合理性)
     if (scores.modelSmoothness > 7 &&
         scores.brokenFaces === 10 &&
-        checkOthers(['modelSmoothness', 'brokenFaces'], 3)) {
+        checkOthers(['modelSmoothness', 'brokenFaces', 'uvUtilization'], 3)) {
       tags.push({ label: '3D打印', color: 'purple', description: '拆件后可作为3D打印模型，制作成实体手办' });
     }
 
-    // 影视动画: uv合理性>=0(即>0), 其他项>9
-    if (scores.uvUtilization > 0 &&
-        checkOthers(['uvUtilization'], 9)) {
+    // 影视动画: 其他项>9 (忽略UV合理性)
+    if (checkOthers(['uvUtilization'], 9)) {
       tags.push({ label: '影视动画', color: 'gold', description: '精度较高，可作为影视模型制作动画或短剧' });
     }
 
