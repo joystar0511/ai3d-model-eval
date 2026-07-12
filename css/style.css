@@ -767,6 +767,20 @@ a:hover { text-decoration: underline; }
   padding-left: 12px;
   border-left: 2px solid var(--border);
 }
+.pk-summary-analysis {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.8;
+  margin: 8px 0 4px;
+  padding: 10px 14px;
+  background: rgba(255,255,255,0.02);
+  border-radius: 8px;
+  border-left: 3px solid var(--border);
+}
+.pk-summary-analysis strong {
+  color: var(--text);
+  font-weight: 600;
+}
 .pk-summary-strengths {
   font-size: 13px;
   color: var(--text-dim);
