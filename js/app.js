@@ -1171,6 +1171,7 @@ class App {
     const evaluatedModels = this.models.filter(m => m.evaluation);
     if (evaluatedModels.length < 2) return;
 
+    try {
     const pkData = ModelEvaluator.compareModels(
       evaluatedModels.map(m => {
         const geo = m.viewer?.getGeometryData();
@@ -1278,6 +1279,26 @@ class App {
     const fullPKBtn = this.pkSection.querySelector('#viewFullPKBtn');
     if (fullPKBtn) {
       fullPKBtn.addEventListener('click', () => this._showFullPKReport());
+    }
+    } catch (err) {
+      console.error('[_renderPK] Error:', err);
+      // Still render the button even if there's an error
+      this.pkSection.innerHTML = `
+        <h2>Model PK - 对比评测</h2>
+        <div style="padding:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;color:var(--text-dim);">
+          ⚠ 对比评测渲染时出现错误：${err.message}
+        </div>
+        <div style="text-align:center;margin-top:16px;">
+          <button class="btn btn-outline btn-sm" id="viewFullPKBtn">
+            <span>📄 查看完整对比报告</span>
+          </button>
+        </div>
+      `;
+      this.pkSection.classList.add('visible');
+      const fullPKBtn = this.pkSection.querySelector('#viewFullPKBtn');
+      if (fullPKBtn) {
+        fullPKBtn.addEventListener('click', () => this._showFullPKReport());
+      }
     }
   }
 
@@ -1431,6 +1452,8 @@ class App {
   _showFullPKReport() {
     const evaluatedModels = this.models.filter(m => m.evaluation);
     if (evaluatedModels.length < 2) return;
+
+    try {
 
     const pkData = ModelEvaluator.compareModels(
       evaluatedModels.map(m => {
@@ -1599,6 +1622,11 @@ class App {
         this._shareToPlatform(btn.dataset.platform, `模型对比报告`, null);
       });
     });
+
+    } catch (err) {
+      console.error('[_showFullPKReport] Error:', err);
+      alert('查看完整对比报告时出现错误：' + err.message + '\n\n请将控制台(F12)中的错误信息截图发送给开发者。');
+    }
   }
 
   /**
