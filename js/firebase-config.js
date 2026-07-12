@@ -20,3 +20,13 @@
  */
 
 window.FIREBASE_DB_URL = 'https://ai3d-model-eval-default-rtdb.firebaseio.com/';  // <-- PASTE YOUR DATABASE URL HERE
+
+/**
+ * Admin Password Configuration
+ *
+ * Only the admin (who knows this password) can delete models from the library.
+ * Regular users can browse, view details, and download — but cannot delete.
+ *
+ * To change the password, simply edit the string below.
+ */
+window.ADMIN_PASSWORD = 'admin913';  // <-- Change this to your own password
