@@ -270,8 +270,8 @@ class ModelEvaluator {
    *   60%-80%: deduct 1 per 1% below 80%
    *   < 60%: 0 points
    * Step 2 — UV shell count (only if score > 0 from step 1):
-   *   ≤ 15 shells: no deduction
-   *   > 15 shells: deduct 0.1 per extra shell
+   *   ≤ 80 shells: no deduction
+   *   > 80 shells: deduct 0.02 per extra shell
    *
    * Also checks for out-of-range UVs as a penalty factor.
    */
@@ -311,9 +311,9 @@ class ModelEvaluator {
     }
 
     // Step 2: UV shell count penalty
-    if (score > 0 && shellCount > 15) {
-      const extraShells = shellCount - 15;
-      score -= extraShells * 0.1;
+    if (score > 0 && shellCount > 80) {
+      const extraShells = shellCount - 80;
+      score -= extraShells * 0.02;
     }
 
     // Penalty for out-of-range UVs (max 30% of score)
@@ -1073,13 +1073,17 @@ class ModelEvaluator {
    * - 手绘游戏: 贴图细节与复杂性>8, 其他项>3
    * - 3D打印: 模型光滑度>9, 其他项>3
    * - 影视动画: 所有项>9
+   * - 高模: 面数>30000
+   * - 简模: 面数<2000
    *
    * A model can match multiple tags — all matching tags are returned.
+   * Each tag includes a description for use in PK comparison summary.
    *
    * @param {Array} breakdown - The breakdown array from evaluation result
-   * @returns {Array} Array of { label, color } objects
+   * @param {Object} meta - Optional metadata { faces, vertices, ... }
+   * @returns {Array} Array of { label, color, description } objects
    */
-  static generateUsageTags(breakdown) {
+  static generateUsageTags(breakdown, meta) {
     if (!breakdown || !Array.isArray(breakdown)) return [];
 
     const scores = {};
@@ -1088,6 +1092,7 @@ class ModelEvaluator {
     }
 
     const allKeys = DIMENSIONS.map(d => d.key);
+    const faceCount = meta?.faces || 0;
 
     // Helper: check if all dimensions NOT in excludeKeys meet the threshold
     const checkOthers = (excludeKeys, threshold) => {
@@ -1107,24 +1112,34 @@ class ModelEvaluator {
         scores.uvUtilization > 9 &&
         scores.normalMapQuality > 8 &&
         checkOthers(['materialRationality', 'modelSmoothness', 'uvUtilization', 'normalMapQuality'], 3)) {
-      tags.push({ label: '次世代游戏', color: 'blue' });
+      tags.push({ label: '次世代游戏', color: 'blue', description: '可以用作次世代游戏模型，直接导入unity或虚幻等引擎作为游戏资产' });
     }
 
     // 手绘游戏: 贴图细节与复杂性>8, 其他项>3
     if (scores.textureDetail > 8 &&
         checkOthers(['textureDetail'], 3)) {
-      tags.push({ label: '手绘游戏', color: 'green' });
+      tags.push({ label: '手绘游戏', color: 'green', description: '可以用作手绘游戏资产，常见于风格化手绘游戏或小游戏' });
     }
 
     // 3D打印: 模型光滑度>9, 其他项>3
     if (scores.modelSmoothness > 9 &&
         checkOthers(['modelSmoothness'], 3)) {
-      tags.push({ label: '3D打印', color: 'purple' });
+      tags.push({ label: '3D打印', color: 'purple', description: '拆件后可作为3D打印模型，制作成实体手办' });
     }
 
     // 影视动画: 所有项>9
     if (allKeys.every(key => scores[key] > 9)) {
-      tags.push({ label: '影视动画', color: 'gold' });
+      tags.push({ label: '影视动画', color: 'gold', description: '精度较高，可作为影视模型制作动画或短剧' });
+    }
+
+    // 高模: 面数大于30000三角面
+    if (faceCount > 30000) {
+      tags.push({ label: '高模', color: 'orange', description: '这是一个高模' });
+    }
+
+    // 简模: 面数小于2000三角面
+    if (faceCount > 0 && faceCount < 2000) {
+      tags.push({ label: '简模', color: 'teal', description: '这是一个低模' });
     }
 
     return tags;
