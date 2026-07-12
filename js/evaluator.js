@@ -1013,9 +1013,31 @@ class ModelEvaluator {
     if (!results || results.length < 2) return null;
 
     const sorted = [...results].sort((a, b) => b.result.totalScore - a.result.totalScore);
+
+    // Per-model strengths: dimensions where this model scores highest among all
+    const allModels = sorted.map((model, idx) => {
+      const strengths = [];
+      for (const dim of DIMENSIONS) {
+        const modelScore = model.result.breakdown.find(b => b.key === dim.key)?.score ?? 0;
+        let isBest = true;
+        for (const other of sorted) {
+          if (other === model) continue;
+          const otherScore = other.result.breakdown.find(b => b.key === dim.key)?.score ?? 0;
+          if (otherScore > modelScore) { isBest = false; break; }
+        }
+        if (isBest) strengths.push(dim.name);
+      }
+      return {
+        ...model,
+        rank: idx + 1,
+        strengths,
+        isCharacterModel: model.result.isCharacterModel,
+      };
+    });
+
+    // Dimension comparison (for backward compat, uses top 2)
     const winner = sorted[0];
     const runner = sorted[1];
-
     const dimensionComparison = DIMENSIONS.map(dim => {
       const wScore = winner.result.breakdown.find(b => b.key === dim.key);
       const rScore = runner.result.breakdown.find(b => b.key === dim.key);
@@ -1031,8 +1053,8 @@ class ModelEvaluator {
       };
     });
 
-    const winnerStrengths = dimensionComparison.filter(d => d.winner > d.runner).map(d => d.name);
-    const runnerStrengths = dimensionComparison.filter(d => d.runner > d.winner).map(d => d.name);
+    const winnerStrengths = allModels[0].strengths;
+    const runnerStrengths = allModels[1].strengths;
 
     const winnerIsChar = winner.result.isCharacterModel;
     const runnerIsChar = runner.result.isCharacterModel;
@@ -1049,6 +1071,7 @@ class ModelEvaluator {
     return {
       winner,
       runner,
+      allModels,
       scoreDiff: r2(winner.result.totalScore - runner.result.totalScore),
       dimensionComparison,
       winnerStrengths,
