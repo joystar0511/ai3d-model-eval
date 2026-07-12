@@ -7,7 +7,7 @@
  * 3. 重合点 (Unmerged Vertices) - 10 (no deduction, recommendation tag only)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
- * 6. UV利用度 (UV Utilization) - 10
+ * 6. UV合理性 (UV Rationality) - 10
  * 7. 贴图细节与复杂性 (Texture Detail) - 10 (HSV bin analysis)
  * 8. 贴图色彩 (Texture Color) - 10 (brightness < 2 or > 253)
  * 9. 一致性与伪影 (Consistency & Artifacts) - 10 (model-space UV symmetry)
@@ -42,7 +42,7 @@ const DIMENSIONS = [
   { key: 'overlappingVerts',   name: '重合点',           max: 10 },
   { key: 'wireUniformity',     name: '布线均匀度',       max: 10 },
   { key: 'riggability',        name: '可绑定程度',       max: 10 },
-  { key: 'uvUtilization',      name: 'UV利用度',         max: 10 },
+  { key: 'uvUtilization',      name: 'UV合理性',         max: 10 },
   { key: 'textureDetail',      name: '贴图细节与复杂性',  max: 10 },
   { key: 'textureColor',       name: '贴图色彩',         max: 10 },
   { key: 'consistency',        name: '一致性与伪影',     max: 10 },
@@ -259,7 +259,7 @@ class ModelEvaluator {
   }
 
   /**
-   * UV利用度 (UV Utilization)
+   * UV合理性 (UV Rationality)
    *
    * Uses pre-computed uvOccupancy (64x64 UV triangle rasterization) and
    * uvShellCount (Union-Find connected components) from viewer.js.
@@ -274,6 +274,7 @@ class ModelEvaluator {
    *   > 80 shells: deduct 0.02 per extra shell
    *
    * Also checks for out-of-range UVs as a penalty factor.
+   * UV shell count > 200 is flagged in PK summary as "UV排布不合理，需要重新分UV".
    */
   static _evalUVUtilization(geo) {
     const max = RAW_MAX.uvUtilization;
@@ -322,7 +323,7 @@ class ModelEvaluator {
       score = Math.max(score - penalty, 0);
     }
 
-    console.log(`[UV利用度] 占比=${(occupancy * 100).toFixed(1)}%, UV壳数=${shellCount}, 超范围比例=${(outOfRangeRatio * 100).toFixed(1)}%, 得分=${Math.max(score, 0).toFixed(2)}`);
+    console.log(`[UV合理性] 占比=${(occupancy * 100).toFixed(1)}%, UV壳数=${shellCount}, 超范围比例=${(outOfRangeRatio * 100).toFixed(1)}%, 得分=${Math.max(score, 0).toFixed(2)}`);
     return Math.max(score, 0);
   }
 
@@ -644,15 +645,16 @@ class ModelEvaluator {
 
   static _evalNormalMapQuality(tex) {
     const max = RAW_MAX.normalMapQuality;
-    // No normal map uploaded → 8 points (baseline for missing texture)
-    if (!tex || !tex.hasNormalMap) return 8;
+    // No normal map uploaded → 6 points (baseline for missing texture)
+    if (!tex || !tex.hasNormalMap) return 6;
 
     const normalData = tex.imageData?.normalMap;
-    if (!normalData) return 8;
+    if (!normalData) return 6;
 
     const colorData = tex.imageData?.baseColor;
 
-    let score = max * 0.6;
+    // Start from 6 (same as no-normal baseline), then add/subtract based on quality
+    let score = 6;
 
     const { data } = normalData;
     let bSum = 0, pixelCount = 0;
@@ -662,17 +664,24 @@ class ModelEvaluator {
     }
     const avgBlue = bSum / pixelCount;
 
-    // Good blue channel → bonus; poor blue channel → penalty (can go below 8)
+    // Blue channel quality assessment
+    // Good normal maps have avgBlue > 128 (facing up, Z+ dominant)
     if (avgBlue > 180) {
-      score += max * 0.2;
+      score += 2.5;
+    } else if (avgBlue > 150) {
+      score += 1.5;
     } else if (avgBlue > 128) {
-      score += max * 0.1;
+      score += 0.5;
     } else if (avgBlue < 80) {
-      // Very poor normal map quality — penalty
-      const penalty = Math.min((80 - avgBlue) / 80 * max * 0.3, max * 0.3);
-      score -= penalty;
+      // Very poor blue channel — strong penalty, can go well below 6
+      score -= 2.5;
+    } else if (avgBlue < 110) {
+      // Below average — moderate penalty
+      score -= 1.0;
     }
 
+    // Correspondence with color map: check if concave/convex areas in color
+    // map have corresponding normal detail
     if (colorData && colorData.width === normalData.width) {
       let correspondCount = 0;
       let checkedPixels = 0;
@@ -690,18 +699,27 @@ class ModelEvaluator {
 
       if (checkedPixels > 0) {
         const correspondRatio = correspondCount / checkedPixels;
-        if (correspondRatio > 0.7) {
-          score += max * 0.2;
-        } else if (correspondRatio < 0.3) {
-          // Very poor correspondence — penalty (can go below 8)
-          score -= max * 0.15;
-        } else {
-          score += max * 0.1;
+        if (correspondRatio > 0.75) {
+          // Excellent correspondence — color map details match normal map
+          score += 1.5;
+        } else if (correspondRatio > 0.55) {
+          score += 0.5;
+        } else if (correspondRatio < 0.25) {
+          // Very poor correspondence — color map concave/convex areas don't
+          // match normal map, significant penalty
+          score -= 2.0;
+        } else if (correspondRatio < 0.40) {
+          // Below average correspondence — moderate penalty
+          score -= 1.0;
         }
       }
+    } else if (colorData) {
+      // Has color map but different resolution — can't fully verify correspondence
+      score += 0;
     }
 
-    return Math.min(score, max);
+    console.log(`[法线贴图质量] avgBlue=${avgBlue.toFixed(1)}, 有颜色贴图=${!!colorData}, 得分=${Math.min(Math.max(score, 0), max).toFixed(2)}`);
+    return Math.min(Math.max(score, 0), max);
   }
 
   /**
@@ -881,11 +899,11 @@ class ModelEvaluator {
 
     const uvScore = scores.uvUtilization;
     if (uvScore >= 8) {
-      analyses.push({ title: 'UV展开', content: 'UV利用率良好，UV壳在UV空间内分布合理。' });
+      analyses.push({ title: 'UV展开', content: 'UV合理性良好，UV壳在UV空间内分布合理。' });
     } else if (uvScore >= 5) {
-      analyses.push({ title: 'UV展开', content: 'UV利用率一般，部分UV壳可能存在重叠或浪费空间的情况。' });
+      analyses.push({ title: 'UV展开', content: 'UV合理性一般，部分UV壳可能存在重叠或浪费空间的情况。' });
     } else {
-      analyses.push({ title: 'UV展开', content: 'UV利用率较低，建议重新进行UV展开以优化空间利用率。' });
+      analyses.push({ title: 'UV展开', content: 'UV合理性较低，建议重新进行UV展开以优化空间利用率。' });
     }
 
     // Model smoothness analysis
@@ -939,7 +957,7 @@ class ModelEvaluator {
    *
    * 1. 规整性 (Regularity): 隐藏面, 破面, 重合点
    * 2. 美观度 (Aesthetics): 布线均匀度, 模型光滑度
-   * 3. UV: UV利用度
+   * 3. UV: UV合理性
    * 4. 绑定难易度 (Rig Difficulty): 可绑定程度
    * 5. 色彩 (Color): 贴图色彩, 一致性与伪影, 贴图细节与复杂性
    * 6. 材质 (Material): 法线贴图质量, 材质合理性
@@ -1069,7 +1087,7 @@ class ModelEvaluator {
    * Generate usage recommendation tags based on evaluation scores.
    *
    * Tag criteria (from Excel spec):
-   * - 次世代游戏: 材质合理性>6, 模型光滑度>8, UV利用度>9, 法线贴图质量>8, 其他项>3
+   * - 次世代游戏: 材质合理性>6, 模型光滑度>8, UV合理性>9, 法线贴图质量>8, 其他项>3
    * - 手绘游戏: 贴图细节与复杂性>8, 其他项>3
    * - 3D打印: 模型光滑度>9, 其他项>3
    * - 影视动画: 所有项>9
@@ -1106,7 +1124,7 @@ class ModelEvaluator {
 
     const tags = [];
 
-    // 次世代游戏: 材质合理性>6, 模型光滑度>8, UV利用度>9, 法线贴图质量>8, 其他项>3
+    // 次世代游戏: 材质合理性>6, 模型光滑度>8, UV合理性>9, 法线贴图质量>8, 其他项>3
     if (scores.materialRationality > 6 &&
         scores.modelSmoothness > 8 &&
         scores.uvUtilization > 9 &&
