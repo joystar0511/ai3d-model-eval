@@ -798,7 +798,9 @@ class App {
         </div>
       `;
 
-      const downloadBtnHTML = m.modelFile
+      // Show download button if model has files (inline or in separate Firebase nodes)
+      const hasFiles = m.modelFile || m.meta?.hasModelFile !== false;
+      const downloadBtnHTML = hasFiles
         ? `<button class="lib-download-btn" title="打包下载模型及贴图">⬇</button>`
         : '';
 
@@ -814,7 +816,7 @@ class App {
       `;
 
       // Bind download button
-      if (m.modelFile) {
+      if (hasFiles) {
         const dlBtn = card.querySelector('.lib-download-btn');
         if (dlBtn) {
           dlBtn.addEventListener('click', (e) => {
@@ -832,20 +834,39 @@ class App {
 
   async _downloadModelZip(model, btn) {
     const m = model;
-    const hasModelFile = !!m.modelFile;
-    const texFiles = m.textureFiles || {};
-    const texEntries = Object.entries(texFiles).filter(([k, f]) => f && f.data);
-
-    if (!hasModelFile && texEntries.length === 0) {
-      alert('该模型没有可下载的文件数据');
-      return;
-    }
+    let hasModelFile = !!m.modelFile;
+    let texFiles = m.textureFiles || {};
+    let texEntries = Object.entries(texFiles).filter(([k, f]) => f && f.data);
 
     const originalText = btn.textContent;
     btn.textContent = '⏳';
     btn.disabled = true;
 
     try {
+      // If no local file data, fetch from Firebase on-demand
+      if (!hasModelFile && texEntries.length === 0) {
+        btn.textContent = '🔄';
+        console.log('[Download] Fetching files from Firebase for model:', m.id);
+        const files = await CloudStorage.fetchModelFiles(m.id);
+
+        if (files.modelFile) {
+          m.modelFile = files.modelFile;  // cache for potential re-download
+          hasModelFile = true;
+        }
+        if (files.textureFiles && Object.keys(files.textureFiles).length > 0) {
+          m.textureFiles = files.textureFiles;  // cache
+          texFiles = files.textureFiles;
+          texEntries = Object.entries(texFiles).filter(([k, f]) => f && f.data);
+        }
+      }
+
+      if (!hasModelFile && texEntries.length === 0) {
+        alert('该模型没有可下载的文件数据\n\n可能原因：\n• 文件过大未成功上传\n• 模型为旧版数据（升级前分享）\n\n请尝试重新分享该模型。');
+        return;
+      }
+
+      btn.textContent = '📦';
+
       // Check if JSZip is available
       if (typeof JSZip === 'undefined') {
         // Fallback: download files individually
