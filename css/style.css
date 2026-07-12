@@ -663,6 +663,11 @@ a:hover { text-decoration: underline; }
   border-color: rgba(248,113,113,0.4);
   color: #f87171;
 }
+.rec-tag-gray {
+  background: rgba(139,144,160,0.15);
+  border-color: rgba(139,144,160,0.3);
+  color: #8b90a0;
+}
 
 /* ===== Progress Bar ===== */
 .progress-overlay {
