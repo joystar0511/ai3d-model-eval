@@ -585,35 +585,22 @@ class App {
   _renderNotesAndShare(model) {
     const notesSection = document.getElementById(`notes-${model.id}`);
 
-    // Build recommendation tags
+    // Build recommendation tags based on Excel criteria
     let recTagsHTML = '';
     const ev = model.evaluation;
     if (ev) {
-      const tags = [];
-
-      // Purple "不可打印" tag if unmerged vertices exist
-      if (ev.unmergedPairs > 0) {
-        tags.push({ label: '不可打印', color: 'purple', detail: `${ev.unmergedPairs} 组未合并点` });
-      } else {
-        tags.push({ label: '可打印', color: 'green', detail: '无未合并点' });
-      }
-
-      // Character model tag
-      if (ev.isCharacterModel) {
-        tags.push({ label: '角色模型', color: 'gold', detail: `相似度 ${ev.similarity.toFixed(1)}%` });
-      }
-
-      // Score-based tag (high quality only)
-      if (ev.totalScore >= 80) {
-        tags.push({ label: '高质量', color: 'blue', detail: `${ev.totalScore.toFixed(1)}分` });
-      }
+      const tags = ModelEvaluator.generateUsageTags(ev.breakdown);
 
       recTagsHTML = tags.map(t => `
-        <span class="rec-tag rec-tag-${t.color}" title="${t.detail}">
+        <span class="rec-tag rec-tag-${t.color}">
           ${t.label}
-          <span class="rec-tag-detail">${t.detail}</span>
         </span>
       `).join('');
+
+      // If no tags match, show a default message
+      if (tags.length === 0) {
+        recTagsHTML = '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
+      }
     }
 
     notesSection.innerHTML = `
