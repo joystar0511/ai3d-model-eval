@@ -256,6 +256,13 @@ class App {
   }
 
   _handleFiles(fileList) {
+    // Check if any model is currently loading
+    const loadingModels = this.models.filter(m => m.viewer && m.viewer.isLoading);
+    if (loadingModels.length > 0) {
+      this._showToast('有模型正在上传中，请等待当前模型加载完成后再上传', 'warn');
+      return;
+    }
+
     const files = Array.from(fileList);
     const supported = ['obj', 'fbx', 'gltf', 'glb', 'stl', 'ply', 'blend'];
     let validCount = 0;
