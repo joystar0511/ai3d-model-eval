@@ -947,6 +947,119 @@ class App {
   // === PK Section ===
 
   /**
+   * Generate a polished, detailed analysis paragraph for a single model
+   * in the PK comparison. The paragraph includes:
+   * - Overall score and grade assessment
+   * - Topology analysis (hidden faces, broken faces, wire uniformity, smoothness)
+   * - UV analysis (rationality, shell count warnings)
+   * - Texture and material analysis
+   * - Usage tags with descriptions
+   * - Specific warnings (broken faces need manual repair, UV shells >200 need re-UV)
+   */
+  _generateModelSummary(modelData, strengths) {
+    const { name, result, meta } = modelData;
+    const ev = result;
+    const score = ev.totalScore.toFixed(2);
+    const gradeText = ev.grade === 'A' ? '优秀' : ev.grade === 'B' ? '良好' : ev.grade === 'C' ? '合格' : '待改进';
+
+    // Build tags
+    const tags = ModelEvaluator.generateUsageTags(ev.breakdown, meta);
+    const tagsHTML = tags.length > 0
+      ? tags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
+      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
+    const tagsDesc = tags.length > 0
+      ? tags.map(t => t.description).join(' ')
+      : '该模型暂未达到任何特定用途的推荐标准，建议根据评分明细中的弱项进行针对性优化。';
+
+    // Build detailed analysis sentences
+    const sentences = [];
+
+    // 1. Overall assessment
+    sentences.push(`该模型综合评分为 <strong style="color:var(--gold);">${score}</strong> 分，评级 ${ev.grade}（${gradeText}）。`);
+
+    // 2. Topology analysis
+    const topoIssues = [];
+    if (meta.hiddenScore < 8) topoIssues.push('存在部分隐藏面');
+    if (meta.brokenScore < 8) topoIssues.push('检测到破面');
+    if (meta.wireScore < 8) topoIssues.push('布线均匀度有待改善');
+
+    if (topoIssues.length === 0) {
+      sentences.push('拓扑结构方面，模型布线均匀，未检测到隐藏面或破面，结构完整度良好。');
+    } else {
+      sentences.push(`拓扑结构方面，${topoIssues.join('，')}，建议在3D软件中进行检查和修正。`);
+    }
+
+    // 3. Broken faces specific warning
+    if (meta.holeCount > 0 || meta.brokenScore < 8) {
+      sentences.push(`<strong style="color:var(--red);">⚠ 该模型存在破面问题（检测到 ${meta.holeCount} 处空洞），如需使用此模型，请在3D软件中手动修补破面后再进行后续流程。</strong>`);
+    }
+
+    // 4. UV analysis
+    const uvShells = meta.uvShellCount || 0;
+    if (uvShells > 200) {
+      sentences.push(`<strong style="color:var(--gold);">⚠ UV壳数量达到 ${uvShells} 个，超过200个的合理上限，UV排布不合理，需要重新分UV。</strong>`);
+    } else if (meta.uvScore >= 8) {
+      sentences.push(`UV合理性表现良好（${meta.uvScore.toFixed(1)}/10），UV壳数量为 ${uvShells} 个，排布合理。`);
+    } else if (meta.uvScore >= 5) {
+      sentences.push(`UV合理性一般（${meta.uvScore.toFixed(1)}/10），UV壳数量为 ${uvShells} 个，部分UV空间利用率有待优化。`);
+    } else {
+      sentences.push(`UV合理性较低（${meta.uvScore.toFixed(1)}/10），UV壳数量为 ${uvShells} 个，建议重新进行UV展开。`);
+    }
+
+    // 5. Smoothness analysis
+    if (meta.smoothScore >= 9) {
+      sentences.push('模型光滑度优异，平滑处理后体积变化处于理想范围，面数控制合理。');
+    } else if (meta.smoothScore >= 7) {
+      sentences.push('模型光滑度良好，平滑处理后体积变化基本在合理范围内。');
+    } else {
+      sentences.push(`模型光滑度存在不足（${meta.smoothScore.toFixed(1)}/10），建议调整面数或优化布线密度。`);
+    }
+
+    // 6. Texture & material analysis
+    const hasColorMap = meta.textureColorScore > 0;
+    if (hasColorMap) {
+      const texAvg = (meta.textureDetailScore + meta.textureColorScore + meta.consistencyScore) / 3;
+      if (texAvg >= 7) {
+        sentences.push('贴图质量表现良好，色彩分布自然，细节丰富，左右对称性一致。');
+      } else if (texAvg >= 4) {
+        sentences.push('贴图质量尚可，但部分区域可能存在色彩不均匀或细节层次不足的问题。');
+      } else {
+        sentences.push('贴图质量有待提升，建议增加细节层次并优化色彩分布。');
+      }
+    }
+
+    const matAvg = (meta.normalScore + meta.materialScore) / 2;
+    if (matAvg >= 8) {
+      sentences.push('材质配置完整，法线贴图与颜色贴图对应良好，PBR参数合理。');
+    } else if (meta.normalScore <= 6) {
+      sentences.push(`法线贴图质量为 ${meta.normalScore.toFixed(1)}/10，建议检查法线贴图蓝通道质量及与颜色贴图的对应关系。`);
+    }
+
+    // 7. Character model
+    if (ev.isCharacterModel) {
+      if (meta.riggabilityScore >= 9) {
+        sentences.push(`作为角色模型（相似度 ${ev.similarity.toFixed(1)}%），关节布线比例合理，有利于绑定和动画变形。`);
+      } else {
+        sentences.push(`作为角色模型（相似度 ${ev.similarity.toFixed(1)}%），关节布线密度比例不在理想范围，可能影响绑定效果。`);
+      }
+    }
+
+    // 8. Advantage items
+    if (strengths && strengths.length > 0) {
+      sentences.push(`在对比中，该模型在<strong>${strengths.join('、')}</strong>等方面表现更优。`);
+    }
+
+    // Combine all sentences into a paragraph
+    const analysisText = sentences.join(' ');
+
+    return {
+      tagsHTML,
+      analysisText,
+      tagsDesc,
+    };
+  }
+
+  /**
    * Generate SVG radar chart for 6-dimension comparison.
    * Each dimension is 0-10, with rings at 2/4/6/8/10.
    */
@@ -1023,14 +1136,30 @@ class App {
     if (evaluatedModels.length < 2) return;
 
     const pkData = ModelEvaluator.compareModels(
-      evaluatedModels.map(m => ({
-        name: m.name,
-        result: m.evaluation,
-        meta: {
-          faces: m.viewer?.getGeometryData()?.totalFaces || 0,
-          vertices: m.viewer?.getGeometryData()?.totalVertices || 0,
-        },
-      }))
+      evaluatedModels.map(m => {
+        const geo = m.viewer?.getGeometryData();
+        return {
+          name: m.name,
+          result: m.evaluation,
+          meta: {
+            faces: geo?.totalFaces || 0,
+            vertices: geo?.totalVertices || 0,
+            uvShellCount: geo?.uvShellCount || 0,
+            holeCount: geo?.holeCount || 0,
+            brokenScore: m.evaluation?.breakdown?.find(b => b.key === 'brokenFaces')?.score ?? 10,
+            uvScore: m.evaluation?.breakdown?.find(b => b.key === 'uvUtilization')?.score ?? 10,
+            smoothScore: m.evaluation?.breakdown?.find(b => b.key === 'modelSmoothness')?.score ?? 10,
+            wireScore: m.evaluation?.breakdown?.find(b => b.key === 'wireUniformity')?.score ?? 10,
+            hiddenScore: m.evaluation?.breakdown?.find(b => b.key === 'hiddenFaces')?.score ?? 10,
+            normalScore: m.evaluation?.breakdown?.find(b => b.key === 'normalMapQuality')?.score ?? 10,
+            materialScore: m.evaluation?.breakdown?.find(b => b.key === 'materialRationality')?.score ?? 10,
+            textureDetailScore: m.evaluation?.breakdown?.find(b => b.key === 'textureDetail')?.score ?? 10,
+            textureColorScore: m.evaluation?.breakdown?.find(b => b.key === 'textureColor')?.score ?? 10,
+            consistencyScore: m.evaluation?.breakdown?.find(b => b.key === 'consistency')?.score ?? 10,
+            riggabilityScore: m.evaluation?.breakdown?.find(b => b.key === 'riggability')?.score ?? 10,
+          },
+        };
+      })
     );
     if (!pkData) return;
 
@@ -1046,31 +1175,9 @@ class App {
     const winnerType = pkData.winnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
     const runnerType = pkData.runnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
 
-    // Generate usage tags for both models (with descriptions)
-    const winnerTags = ModelEvaluator.generateUsageTags(pkData.winner.result.breakdown, pkData.winner.meta);
-    const runnerTags = ModelEvaluator.generateUsageTags(pkData.runner.result.breakdown, pkData.runner.meta);
-
-    // Build per-model summary paragraphs
-    const winnerTagsHTML = winnerTags.length > 0
-      ? winnerTags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
-      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
-    const runnerTagsHTML = runnerTags.length > 0
-      ? runnerTags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
-      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
-
-    const winnerDescHTML = winnerTags.length > 0
-      ? winnerTags.map(t => `<p class="pk-summary-desc">${t.description}</p>`).join('')
-      : '';
-    const runnerDescHTML = runnerTags.length > 0
-      ? runnerTags.map(t => `<p class="pk-summary-desc">${t.description}</p>`).join('')
-      : '';
-
-    const winnerStrengths = pkData.winnerStrengths.length > 0
-      ? `<div class="pk-summary-strengths"><span class="pk-strength-label">优势项：</span>${pkData.winnerStrengths.join('、')}</div>`
-      : '';
-    const runnerStrengths = pkData.runnerStrengths.length > 0
-      ? `<div class="pk-summary-strengths"><span class="pk-strength-label">优势项：</span>${pkData.runnerStrengths.join('、')}</div>`
-      : '';
+    // Generate polished per-model summaries using the 8-section template
+    const winnerSummary = this._generateModelSummary(pkData.winner, pkData.winnerStrengths);
+    const runnerSummary = this._generateModelSummary(pkData.runner, pkData.runnerStrengths);
 
     this.pkSection.innerHTML = `
       <h2>Model PK - 对比评测</h2>
@@ -1109,9 +1216,8 @@ class App {
             <span class="pk-summary-model-name" style="color:#3b82f6;">${pkData.winner.name}</span>
             <span class="pk-summary-model-score">${pkData.winner.result.totalScore.toFixed(2)} / 100</span>
           </div>
-          <div class="pk-summary-tags">${winnerTagsHTML}</div>
-          ${winnerDescHTML}
-          ${winnerStrengths}
+          <div class="pk-summary-tags">${winnerSummary.tagsHTML}</div>
+          <p class="pk-summary-analysis">${winnerSummary.analysisText}</p>
         </div>
         <div class="pk-summary-divider"></div>
         <div class="pk-summary-model">
@@ -1119,9 +1225,8 @@ class App {
             <span class="pk-summary-model-name" style="color:#ef4444;">${pkData.runner.name}</span>
             <span class="pk-summary-model-score">${pkData.runner.result.totalScore.toFixed(2)} / 100</span>
           </div>
-          <div class="pk-summary-tags">${runnerTagsHTML}</div>
-          ${runnerDescHTML}
-          ${runnerStrengths}
+          <div class="pk-summary-tags">${runnerSummary.tagsHTML}</div>
+          <p class="pk-summary-analysis">${runnerSummary.analysisText}</p>
         </div>
       </div>
       <div style="text-align:center;margin-top:16px;">
@@ -1291,14 +1396,30 @@ class App {
     if (evaluatedModels.length < 2) return;
 
     const pkData = ModelEvaluator.compareModels(
-      evaluatedModels.map(m => ({
-        name: m.name,
-        result: m.evaluation,
-        meta: {
-          faces: m.viewer?.getGeometryData()?.totalFaces || 0,
-          vertices: m.viewer?.getGeometryData()?.totalVertices || 0,
-        },
-      }))
+      evaluatedModels.map(m => {
+        const geo = m.viewer?.getGeometryData();
+        return {
+          name: m.name,
+          result: m.evaluation,
+          meta: {
+            faces: geo?.totalFaces || 0,
+            vertices: geo?.totalVertices || 0,
+            uvShellCount: geo?.uvShellCount || 0,
+            holeCount: geo?.holeCount || 0,
+            brokenScore: m.evaluation?.breakdown?.find(b => b.key === 'brokenFaces')?.score ?? 10,
+            uvScore: m.evaluation?.breakdown?.find(b => b.key === 'uvUtilization')?.score ?? 10,
+            smoothScore: m.evaluation?.breakdown?.find(b => b.key === 'modelSmoothness')?.score ?? 10,
+            wireScore: m.evaluation?.breakdown?.find(b => b.key === 'wireUniformity')?.score ?? 10,
+            hiddenScore: m.evaluation?.breakdown?.find(b => b.key === 'hiddenFaces')?.score ?? 10,
+            normalScore: m.evaluation?.breakdown?.find(b => b.key === 'normalMapQuality')?.score ?? 10,
+            materialScore: m.evaluation?.breakdown?.find(b => b.key === 'materialRationality')?.score ?? 10,
+            textureDetailScore: m.evaluation?.breakdown?.find(b => b.key === 'textureDetail')?.score ?? 10,
+            textureColorScore: m.evaluation?.breakdown?.find(b => b.key === 'textureColor')?.score ?? 10,
+            consistencyScore: m.evaluation?.breakdown?.find(b => b.key === 'consistency')?.score ?? 10,
+            riggabilityScore: m.evaluation?.breakdown?.find(b => b.key === 'riggability')?.score ?? 10,
+          },
+        };
+      })
     );
     if (!pkData) return;
 
@@ -1306,30 +1427,9 @@ class App {
     const dimsRunner = ModelEvaluator.computeSixDimensions(pkData.runner.result.breakdown);
     const radarSVG = this._generateRadarChartSVG(dimsWinner, dimsRunner, pkData.winner.name, pkData.runner.name);
 
-    // Generate usage tags for both models (with descriptions)
-    const winnerTags = ModelEvaluator.generateUsageTags(pkData.winner.result.breakdown, pkData.winner.meta);
-    const runnerTags = ModelEvaluator.generateUsageTags(pkData.runner.result.breakdown, pkData.runner.meta);
-
-    const winnerTagsHTML = winnerTags.length > 0
-      ? winnerTags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
-      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
-    const runnerTagsHTML = runnerTags.length > 0
-      ? runnerTags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
-      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
-
-    const winnerDescHTML = winnerTags.length > 0
-      ? winnerTags.map(t => `<p class="pk-summary-desc">${t.description}</p>`).join('')
-      : '';
-    const runnerDescHTML = runnerTags.length > 0
-      ? runnerTags.map(t => `<p class="pk-summary-desc">${t.description}</p>`).join('')
-      : '';
-
-    const winnerStrengths = pkData.winnerStrengths.length > 0
-      ? `<div class="pk-summary-strengths"><span class="pk-strength-label">优势项：</span>${pkData.winnerStrengths.join('、')}</div>`
-      : '';
-    const runnerStrengths = pkData.runnerStrengths.length > 0
-      ? `<div class="pk-summary-strengths"><span class="pk-strength-label">优势项：</span>${pkData.runnerStrengths.join('、')}</div>`
-      : '';
+    // Generate polished per-model summaries using the 8-section template
+    const winnerSummary = this._generateModelSummary(pkData.winner, pkData.winnerStrengths);
+    const runnerSummary = this._generateModelSummary(pkData.runner, pkData.runnerStrengths);
 
     // Remove any existing overlay
     const existing = document.getElementById('fullReportOverlay');
@@ -1396,9 +1496,8 @@ class App {
                 <span class="pk-summary-model-name" style="color:#3b82f6;">${pkData.winner.name}</span>
                 <span class="pk-summary-model-score">${pkData.winner.result.totalScore.toFixed(2)} / 100</span>
               </div>
-              <div class="pk-summary-tags">${winnerTagsHTML}</div>
-              ${winnerDescHTML}
-              ${winnerStrengths}
+              <div class="pk-summary-tags">${winnerSummary.tagsHTML}</div>
+              <p class="pk-summary-analysis">${winnerSummary.analysisText}</p>
             </div>
             <div class="pk-summary-divider"></div>
             <div class="pk-summary-model">
@@ -1406,9 +1505,8 @@ class App {
                 <span class="pk-summary-model-name" style="color:#ef4444;">${pkData.runner.name}</span>
                 <span class="pk-summary-model-score">${pkData.runner.result.totalScore.toFixed(2)} / 100</span>
               </div>
-              <div class="pk-summary-tags">${runnerTagsHTML}</div>
-              ${runnerDescHTML}
-              ${runnerStrengths}
+              <div class="pk-summary-tags">${runnerSummary.tagsHTML}</div>
+              <p class="pk-summary-analysis">${runnerSummary.analysisText}</p>
             </div>
           </div>
 
