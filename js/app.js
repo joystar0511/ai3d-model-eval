@@ -719,13 +719,30 @@ class App {
   // === Model Library ===
 
   _loadLibrary() {
-    const allModels = CloudStorage.getAllModels();
-    this._renderLibrary(allModels);
+    // 1. Render from localStorage cache immediately
+    const cached = CloudStorage.getAllModels();
+    this._renderLibrary(cached);
+
+    // 2. Async refresh from Firebase
+    this._asyncRefreshLibrary();
+  }
+
+  async _asyncRefreshLibrary() {
+    try {
+      const models = await CloudStorage.getLibraryAsync();
+      // Re-render with fresh data from cloud
+      this._renderLibrary(models);
+    } catch (e) {
+      console.warn('Library async refresh failed:', e);
+    }
   }
 
   _refreshLibrary() {
-    const allModels = CloudStorage.getAllModels();
-    this._renderLibrary(allModels, true); // randomize
+    const cached = CloudStorage.getAllModels();
+    this._renderLibrary(cached, true); // randomize from cache
+
+    // Also refresh from cloud
+    this._asyncRefreshLibrary();
   }
 
   _renderLibrary(allModels, randomize = false) {
