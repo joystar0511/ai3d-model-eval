@@ -705,6 +705,77 @@ a:hover { text-decoration: underline; }
   border-color: rgba(139,144,160,0.3);
   color: #8b90a0;
 }
+.rec-tag-orange {
+  background: rgba(251,146,60,0.15);
+  border-color: rgba(251,146,60,0.4);
+  color: #fb923c;
+}
+.rec-tag-teal {
+  background: rgba(20,184,166,0.15);
+  border-color: rgba(20,184,166,0.4);
+  color: #2dd4bf;
+}
+
+/* ===== PK Summary Section ===== */
+.pk-summary-section {
+  margin-top: 16px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 24px;
+}
+.pk-summary-title {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: 4px;
+}
+.pk-summary-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 12px 0;
+}
+.pk-summary-model {
+  padding: 8px 0;
+}
+.pk-summary-model-header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+}
+.pk-summary-model-name {
+  font-size: 16px;
+  font-weight: 700;
+}
+.pk-summary-model-score {
+  font-size: 14px;
+  color: var(--text-dim);
+  font-weight: 600;
+}
+.pk-summary-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+.pk-summary-desc {
+  font-size: 13px;
+  color: var(--text-dim);
+  line-height: 1.6;
+  margin: 4px 0;
+  padding-left: 12px;
+  border-left: 2px solid var(--border);
+}
+.pk-summary-strengths {
+  font-size: 13px;
+  color: var(--text-dim);
+  margin-top: 6px;
+}
+.pk-strength-label {
+  font-weight: 600;
+  color: var(--text);
+}
 
 /* ===== Progress Bar ===== */
 .progress-overlay {
