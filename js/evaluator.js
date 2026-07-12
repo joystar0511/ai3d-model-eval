@@ -261,72 +261,68 @@ class ModelEvaluator {
   /**
    * UV利用度 (UV Utilization)
    *
-   * Uses actual UV data from the model:
-   * - Divide UV space [0,1]x[0,1] into a 32x32 grid
-   * - Count occupied cells (cells with at least one UV point)
-   * - Utilization ratio = occupied / total
-   * - Also checks for UVs outside [0,1] range (indicates poor layout)
-   * - Score based on utilization ratio: >80% = full, <60% = 0
+   * Uses pre-computed uvOccupancy (64x64 UV triangle rasterization) and
+   * uvShellCount (Union-Find connected components) from viewer.js.
+   *
+   * Scoring:
+   * Step 1 — UV occupancy ratio:
+   *   > 80%: no deduction
+   *   60%-80%: deduct 1 per 1% below 80%
+   *   < 60%: 0 points
+   * Step 2 — UV shell count (only if score > 0 from step 1):
+   *   ≤ 15 shells: no deduction
+   *   > 15 shells: deduct 0.1 per extra shell
+   *
+   * Also checks for out-of-range UVs as a penalty factor.
    */
   static _evalUVUtilization(geo) {
     const max = RAW_MAX.uvUtilization;
     if (!geo.hasUV) return max * 0.3;
 
-    const uvs = geo.uvs;
-    if (!uvs || uvs.length === 0) return max * 0.3;
+    // Use pre-computed occupancy from rasterized UV triangles
+    const occupancy = geo.uvOccupancy || 0;
+    const shellCount = geo.uvShellCount || 0;
 
-    // 32x32 grid in UV space
-    const gridSize = 32;
-    const grid = new Set();
+    // Also check for out-of-range UVs
+    const uvs = geo.uvs;
     let outOfRangeCount = 0;
     let validCount = 0;
-
-    for (let i = 0; i < uvs.length; i++) {
-      const uv = uvs[i];
-      if (!uv) continue;
-      validCount++;
-
-      const u = uv.u;
-      const v = uv.v;
-
-      // Check if UV is outside [0,1] range
-      if (u < -0.001 || u > 1.001 || v < -0.001 || v > 1.001) {
-        outOfRangeCount++;
+    if (uvs) {
+      for (let i = 0; i < uvs.length; i++) {
+        const uv = uvs[i];
+        if (!uv) continue;
+        validCount++;
+        if (uv.u < -0.001 || uv.u > 1.001 || uv.v < -0.001 || uv.v > 1.001) {
+          outOfRangeCount++;
+        }
       }
-
-      // Clamp to grid
-      const gu = Math.max(0, Math.min(gridSize - 1, Math.floor(u * gridSize)));
-      const gv = Math.max(0, Math.min(gridSize - 1, Math.floor(v * gridSize)));
-      grid.add(gu * gridSize + gv);
     }
+    const outOfRangeRatio = validCount > 0 ? outOfRangeCount / validCount : 0;
 
-    if (validCount === 0) return max * 0.3;
-
-    const totalCells = gridSize * gridSize;
-    const occupiedCells = grid.size;
-    const utilizationRatio = occupiedCells / totalCells;
-
-    // Out-of-range UVs indicate poor layout
-    const outOfRangeRatio = outOfRangeCount / validCount;
-
-    // Score: utilization > 80% = full marks
-    // utilization 60-80% = proportional
-    // utilization < 60% = 0
     let score;
-    if (utilizationRatio > 0.8) {
+    if (occupancy > 0.8) {
       score = max;
-    } else if (utilizationRatio > 0.6) {
-      score = max * ((utilizationRatio - 0.6) / 0.2);
+    } else if (occupancy > 0.6) {
+      // Deduct 1 per 1% below 80%
+      const deficitPercent = (0.8 - occupancy) * 100;
+      score = max - deficitPercent * 1;
     } else {
       score = 0;
     }
 
+    // Step 2: UV shell count penalty
+    if (score > 0 && shellCount > 15) {
+      const extraShells = shellCount - 15;
+      score -= extraShells * 0.1;
+    }
+
     // Penalty for out-of-range UVs (max 30% of score)
-    if (outOfRangeRatio > 0) {
+    if (outOfRangeRatio > 0 && score > 0) {
       const penalty = Math.min(outOfRangeRatio * 0.5, 0.3) * max;
       score = Math.max(score - penalty, 0);
     }
 
+    console.log(`[UV利用度] 占比=${(occupancy * 100).toFixed(1)}%, UV壳数=${shellCount}, 超范围比例=${(outOfRangeRatio * 100).toFixed(1)}%, 得分=${Math.max(score, 0).toFixed(2)}`);
     return Math.max(score, 0);
   }
 
@@ -711,36 +707,39 @@ class ModelEvaluator {
   /**
    * 模型光滑度 (Model Smoothness)
    *
-   * Scoring criterion: 造型是否过度圆润
-   *
-   * Deduction logic:
-   * - > 20000 triangles: deduct 0.5 per 1000 above 20000
-   * - < 5000 triangles: deduct 0.5 per 1000 below 5000
-   * - 5000-20000: compare with 15000, deduct 0.1 per 1000 deviation from 15000
+   * New logic (修改3):
+   * - Smooth the model (Laplacian smoothing + subdivision approximation)
+   * - Compare smoothed model size to original size
+   * - Ratio 0.7-0.9: no deduction (ideal range)
+   * - Ratio < 0.7: deduct 1 per 0.1 below 0.7
+   * - Ratio > 0.9: deduct 0.5 per 0.02 above 0.9
    *
    * Score = max(0, 10 - total deduction)
    */
   static _evalModelSmoothness(geo) {
     const max = RAW_MAX.modelSmoothness;
-    if (!geo || !geo.totalFaces) return max * 0.5;
+    if (!geo || geo.smoothRatio === undefined || geo.smoothRatio === null) {
+      return max * 0.5;
+    }
 
-    const faces = geo.totalFaces;
+    const ratio = geo.smoothRatio;
     let deduction = 0;
 
-    if (faces > 20000) {
-      const excess = faces - 20000;
-      deduction = (excess / 1000) * 0.5;
-    } else if (faces < 5000) {
-      const deficit = 5000 - faces;
-      deduction = (deficit / 1000) * 0.5;
+    if (ratio >= 0.7 && ratio <= 0.9) {
+      // Ideal range — no deduction
+      deduction = 0;
+    } else if (ratio < 0.7) {
+      // Below 0.7: deduct 1 per 0.1 below 0.7
+      const deficit = 0.7 - ratio;
+      deduction = (deficit / 0.1) * 1;
     } else {
-      // 5000-20000: compare with 15000
-      const deviation = Math.abs(faces - 15000);
-      deduction = (deviation / 1000) * 0.1;
+      // Above 0.9: deduct 0.5 per 0.02 above 0.9
+      const excess = ratio - 0.9;
+      deduction = (excess / 0.02) * 0.5;
     }
 
     const score = Math.max(max - deduction, 0);
-    console.log(`[模型光滑度] 面数=${faces}, 扣分=${deduction.toFixed(2)}, 得分=${score.toFixed(2)}`);
+    console.log(`[模型光滑度] 平滑比值=${ratio.toFixed(4)}, 扣分=${deduction.toFixed(2)}, 得分=${score.toFixed(2)}`);
     return score;
   }
 
@@ -891,14 +890,13 @@ class ModelEvaluator {
 
     // Model smoothness analysis
     const smoothScore = scores.modelSmoothness;
-    if (fc > 20000) {
-      analyses.push({ title: '模型光滑度', content: `模型面数（${fc.toLocaleString()}）偏高，造型可能过度圆润，建议减少面数至20000以下以优化性能。` });
-    } else if (fc < 5000) {
-      analyses.push({ title: '模型光滑度', content: `模型面数（${fc.toLocaleString()}）偏低，造型细节可能不足，建议增加面数至5000以上以改善圆润度。` });
-    } else if (smoothScore >= 9) {
-      analyses.push({ title: '模型光滑度', content: `模型面数（${fc.toLocaleString()}）接近理想范围（5000-20000），光滑度适中。` });
+    const smoothRatio = geo?.smoothRatio || 1.0;
+    if (smoothRatio >= 0.7 && smoothRatio <= 0.9) {
+      analyses.push({ title: '模型光滑度', content: `模型平滑处理后体积变化比值为 ${smoothRatio.toFixed(3)}，处于理想范围(0.7-0.9)，拓扑结构合理，光滑度适中。` });
+    } else if (smoothRatio < 0.7) {
+      analyses.push({ title: '模型光滑度', content: `模型平滑处理后体积变化比值为 ${smoothRatio.toFixed(3)}，低于0.7，模型在平滑后收缩过大，可能存在面数不足或拓扑结构问题，建议增加面数或优化布线。` });
     } else {
-      analyses.push({ title: '模型光滑度', content: `模型面数（${fc.toLocaleString()}）在合理范围内，但偏离理想值15000，光滑度可进一步优化。` });
+      analyses.push({ title: '模型光滑度', content: `模型平滑处理后体积变化比值为 ${smoothRatio.toFixed(3)}，高于0.9，模型在平滑后变化较小，可能面数偏高，造型过度圆润，建议适当减少面数。` });
     }
 
     if (tex?.hasColorMap) {
@@ -935,6 +933,63 @@ class ModelEvaluator {
   }
 
   // === PK Comparison ===
+
+  /**
+   * Aggregate 12 dimensions into 6 macro dimensions for radar chart.
+   *
+   * 1. 规整性 (Regularity): 隐藏面, 破面, 重合点
+   * 2. 美观度 (Aesthetics): 布线均匀度, 模型光滑度
+   * 3. UV: UV利用度
+   * 4. 绑定难易度 (Rig Difficulty): 可绑定程度
+   * 5. 色彩 (Color): 贴图色彩, 一致性与伪影, 贴图细节与复杂性
+   * 6. 材质 (Material): 法线贴图质量, 材质合理性
+   *
+   * Each macro dimension is the average of its sub-dimensions (0-10 scale).
+   * Returns array of { name, score } with score normalized to 0-10.
+   */
+  static computeSixDimensions(breakdown) {
+    if (!breakdown || !Array.isArray(breakdown)) return [];
+
+    const scores = {};
+    for (const item of breakdown) {
+      scores[item.key] = item.score;
+    }
+
+    const dims = [
+      {
+        name: '规整性',
+        keys: ['hiddenFaces', 'brokenFaces', 'overlappingVerts'],
+      },
+      {
+        name: '美观度',
+        keys: ['wireUniformity', 'modelSmoothness'],
+      },
+      {
+        name: 'UV',
+        keys: ['uvUtilization'],
+      },
+      {
+        name: '绑定难易度',
+        keys: ['riggability'],
+      },
+      {
+        name: '色彩',
+        keys: ['textureColor', 'consistency', 'textureDetail'],
+      },
+      {
+        name: '材质',
+        keys: ['normalMapQuality', 'materialRationality'],
+      },
+    ];
+
+    return dims.map(dim => {
+      const validScores = dim.keys.filter(k => scores[k] !== undefined);
+      const avg = validScores.length > 0
+        ? validScores.reduce((sum, k) => sum + scores[k], 0) / validScores.length
+        : 0;
+      return { name: dim.name, score: r2(avg) };
+    });
+  }
 
   static compareModels(results) {
     if (!results || results.length < 2) return null;
