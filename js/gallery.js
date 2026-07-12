@@ -28,8 +28,21 @@ class GalleryApp {
   }
 
   _loadModels() {
-    const allModels = CloudStorage.getAllModels();
-    this._renderGallery(allModels);
+    // 1. Render from localStorage cache immediately
+    const cached = CloudStorage.getAllModels();
+    this._renderGallery(cached);
+
+    // 2. Async refresh from Firebase
+    this._asyncRefreshGallery();
+  }
+
+  async _asyncRefreshGallery() {
+    try {
+      const models = await CloudStorage.getLibraryAsync();
+      this._renderGallery(models);
+    } catch (e) {
+      console.warn('Gallery async refresh failed:', e);
+    }
   }
 
   _renderGallery(models) {
