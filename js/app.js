@@ -1236,15 +1236,6 @@ class App {
       `;
     }).join('');
 
-    // Build radar legend
-    const radarLegendHTML = radarModels.map((m, i) => {
-      const color = modelColors[i];
-      return `<span style="display:flex;align-items:center;gap:8px;">
-        <span style="display:inline-block;width:14px;height:14px;background:${color};border-radius:3px;"></span>
-        <span style="font-size:14px;font-weight:600;">${m.name}</span>
-      </span>`;
-    }).join('');
-
     // Build summary for ALL models
     const summariesHTML = allModels.map((m, i) => {
       const color = modelColors[i] || modelColors[0];
