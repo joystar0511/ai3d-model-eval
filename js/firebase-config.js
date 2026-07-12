@@ -19,4 +19,4 @@
  * 7. Paste it below between the quotes:
  */
 
-window.FIREBASE_DB_URL = '';  // <-- PASTE YOUR DATABASE URL HERE
+window.FIREBASE_DB_URL = 'https://ai3d-model-eval-default-rtdb.firebaseio.com/';  // <-- PASTE YOUR DATABASE URL HERE
