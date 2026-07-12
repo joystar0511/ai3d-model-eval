@@ -798,6 +798,10 @@ class App {
         </div>
       `;
 
+      const downloadBtnHTML = m.modelFile
+        ? `<button class="lib-download-btn" title="打包下载模型及贴图">⬇</button>`
+        : '';
+
       card.innerHTML = `
         <div class="lib-preview">${thumbnailHTML}</div>
         <div class="lib-info">
@@ -806,10 +810,131 @@ class App {
           ${notesHTML}
           ${metaHTML}
         </div>
+        ${downloadBtnHTML}
       `;
+
+      // Bind download button
+      if (m.modelFile) {
+        const dlBtn = card.querySelector('.lib-download-btn');
+        if (dlBtn) {
+          dlBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            this._downloadModelZip(m, dlBtn);
+          });
+        }
+      }
 
       this.libraryGrid.appendChild(card);
     }
+  }
+
+  // === ZIP Download ===
+
+  async _downloadModelZip(model, btn) {
+    const m = model;
+    const hasModelFile = !!m.modelFile;
+    const texFiles = m.textureFiles || {};
+    const texEntries = Object.entries(texFiles).filter(([k, f]) => f && f.data);
+
+    if (!hasModelFile && texEntries.length === 0) {
+      alert('该模型没有可下载的文件数据');
+      return;
+    }
+
+    const originalText = btn.textContent;
+    btn.textContent = '⏳';
+    btn.disabled = true;
+
+    try {
+      // Check if JSZip is available
+      if (typeof JSZip === 'undefined') {
+        // Fallback: download files individually
+        this._downloadFilesIndividually(m);
+        return;
+      }
+
+      const zip = new JSZip();
+      const safeName = (m.name || 'model').replace(/[<>:"/\\|?*]/g, '_');
+      const folder = zip.folder(safeName);
+
+      // Add model file
+      if (hasModelFile) {
+        const fileName = m.meta?.fileName || `${safeName}.glb`;
+        const blob = this._dataUrlToBlob(m.modelFile);
+        folder.file(fileName, blob);
+      }
+
+      // Add texture files
+      for (const [key, texFile] of texEntries) {
+        const texName = texFile.name || `${key}.png`;
+        const blob = this._dataUrlToBlob(texFile.data);
+        folder.file(`textures/${texName}`, blob);
+      }
+
+      // Generate zip
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+
+      // Trigger download — browser will show save dialog
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${safeName}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      this._showToast(`已打包下载 "${safeName}.zip"`, 'success');
+    } catch (e) {
+      console.error('ZIP download failed:', e);
+      // Fallback: download files individually
+      this._downloadFilesIndividually(m);
+    } finally {
+      btn.textContent = originalText;
+      btn.disabled = false;
+    }
+  }
+
+  _dataUrlToBlob(dataUrl) {
+    if (dataUrl instanceof Blob) return dataUrl;
+    if (typeof dataUrl !== 'string') return new Blob([dataUrl]);
+    const parts = dataUrl.split(',');
+    const meta = parts[0];
+    const base64Data = parts[1] || parts[0];
+    const mimeMatch = meta.match(/data:(.*?);base64/);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+    const byteString = atob(base64Data);
+    const bytes = new Uint8Array(byteString.length);
+    for (let i = 0; i < byteString.length; i++) {
+      bytes[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+  }
+
+  _downloadFilesIndividually(m) {
+    if (m.modelFile) {
+      const fileName = m.meta?.fileName || `${m.name || 'model'}.glb`;
+      this._triggerFileDownload(m.modelFile, fileName);
+    }
+    const texFiles = m.textureFiles || {};
+    let delay = 300;
+    for (const [key, texFile] of Object.entries(texFiles)) {
+      if (texFile && texFile.data) {
+        setTimeout(() => {
+          this._triggerFileDownload(texFile.data, texFile.name || `${key}.png`);
+        }, delay);
+        delay += 300;
+      }
+    }
+  }
+
+  _triggerFileDownload(dataUrl, fileName) {
+    const link = document.createElement('a');
+    link.href = dataUrl;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   }
 
   // === PK Section ===
