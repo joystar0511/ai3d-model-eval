@@ -1543,7 +1543,9 @@ class App {
     const dimDetailHTML = allDims[0].map((d, di) => {
       const barsHTML = allModels.map((md, mi) => {
         const color = modelColors[mi] || modelColors[0];
-        const score = md[di].score;
+        const dim = allDims[mi]?.[di];
+        if (!dim) return '';
+        const score = dim.score;
         return `<div class="detail-score-item">
           <span class="detail-item-name">${mi === 0 ? d.name : ''}</span>
           <div class="detail-item-bar-outer">
