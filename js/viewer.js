@@ -517,6 +517,8 @@ class ModelViewer {
     const vertexNeighbors = new Map();
     // UV faces for occupancy calculation
     const uvFaces = [];
+    // All faces as [a, b, c] global vertex indices (for hole detection)
+    const allFaces = [];
     let vertexOffset = 0;
 
     for (const mesh of meshes) {
@@ -584,6 +586,11 @@ class ModelViewer {
               { u: uvAttr.getX(c), v: uvAttr.getY(c) },
             ]);
           }
+
+          // Collect face for hole detection (Issue 1: 破面检测)
+          if (a < posLimit && b < posLimit && c < posLimit) {
+            allFaces.push([a + vertexOffset, b + vertexOffset, c + vertexOffset]);
+          }
         }
       } else {
         totalFaces += posAttr.count / 3;
@@ -615,6 +622,11 @@ class ModelViewer {
               { u: uvAttr.getX(i + 2), v: uvAttr.getY(i + 2) },
             ]);
           }
+
+          // Collect face for hole detection (Issue 1: 破面检测)
+          if (i + 2 < posLimit) {
+            allFaces.push([i + vertexOffset, (i + 1) + vertexOffset, (i + 2) + vertexOffset]);
+          }
         }
       }
 
@@ -630,6 +642,9 @@ class ModelViewer {
     // Count truly unmerged vertices using topological connectivity (Issue 2)
     const unmergedPairs = this._countUnmergedVertices(positions, vertexNeighbors);
     const hiddenFaces = this._findHiddenFaces(faceNormals);
+
+    // Detect holes: edge triangles without corresponding faces (Issue 1: 破面检测)
+    const holeCount = this._detectHoles(vertexNeighbors, allFaces);
 
     // Calculate UV occupancy and shell count (Issue 4)
     let uvOccupancy = 0;
@@ -712,6 +727,7 @@ class ModelViewer {
       meshes: meshes.length,
       uvOccupancy,
       uvShellCount,
+      holeCount,
     };
   }
 
@@ -795,6 +811,72 @@ class ModelViewer {
     if (!map.has(b)) map.set(b, new Set());
     map.get(a).add(b);
     map.get(b).add(a);
+  }
+
+  /**
+   * Detect holes in the mesh — triangles of edges that have no corresponding face.
+   *
+   * A "hole" (破面) is when 3 vertices are pairwise connected by edges
+   * (forming a triangle), but there is no face that uses all 3 vertices.
+   * This means the edges form a boundary loop around an empty space.
+   *
+   * Algorithm:
+   * 1. Build a set of all faces (sorted vertex index triples)
+   * 2. For each vertex a, iterate pairs of neighbors (b, c) where b > a, c > a
+   *    and b, c are also neighbors of each other
+   * 3. Check if face (a, b, c) exists in the face set
+   * 4. If not, it's a hole
+   *
+   * Each triangle is counted exactly once (from its smallest vertex index).
+   */
+  _detectHoles(vertexNeighbors, faces) {
+    if (!vertexNeighbors || vertexNeighbors.size === 0 || !faces || faces.length === 0) {
+      return 0;
+    }
+
+    // Build face set with sorted vertex indices
+    const faceSet = new Set();
+    for (const [a, b, c] of faces) {
+      const sorted = [a, b, c].sort((x, y) => x - y);
+      faceSet.add(`${sorted[0]}_${sorted[1]}_${sorted[2]}`);
+    }
+
+    let holeCount = 0;
+
+    for (const [a, neighbors] of vertexNeighbors) {
+      // Only consider neighbors greater than a (to count each triangle once)
+      const greaterNeighbors = [];
+      for (const n of neighbors) {
+        if (n > a) greaterNeighbors.push(n);
+      }
+
+      // Sort for deterministic iteration
+      greaterNeighbors.sort((x, y) => x - y);
+
+      // Check all pairs of greater neighbors
+      for (let i = 0; i < greaterNeighbors.length; i++) {
+        const b = greaterNeighbors[i];
+        const neighborsB = vertexNeighbors.get(b);
+        if (!neighborsB) continue;
+
+        for (let j = i + 1; j < greaterNeighbors.length; j++) {
+          const c = greaterNeighbors[j];
+
+          // Check if b and c are connected by an edge
+          if (!neighborsB.has(c)) continue;
+
+          // a, b, c form a triangle of edges — check if a face exists
+          // Keys are already sorted since a < b < c
+          const faceKey = `${a}_${b}_${c}`;
+          if (!faceSet.has(faceKey)) {
+            holeCount++;
+          }
+        }
+      }
+    }
+
+    console.log(`[破面检测] 面数=${faces.length}, 检测到空洞=${holeCount}`);
+    return holeCount;
   }
 
   /** Rasterize a UV triangle onto a grid for occupancy calculation */
