@@ -16,7 +16,10 @@ class CloudStorage {
    * Get the Firebase DB URL from config
    */
   static _getDbUrl() {
-    return (typeof window !== 'undefined' && window.FIREBASE_DB_URL) ? window.FIREBASE_DB_URL : '';
+    let url = (typeof window !== 'undefined' && window.FIREBASE_DB_URL) ? window.FIREBASE_DB_URL : '';
+    // Strip trailing slash to avoid double-slash in URL construction
+    if (url.endsWith('/')) url = url.slice(0, -1);
+    return url;
   }
 
   /**
@@ -111,7 +114,7 @@ class CloudStorage {
     }
 
     try {
-      const resp = await fetch(`${dbUrl}/models.json?orderBy="sharedAt"&limitToLast=200`);
+      const resp = await fetch(`${dbUrl}/models.json`);
       if (resp.ok) {
         const data = await resp.json();
         if (!data) return [];
