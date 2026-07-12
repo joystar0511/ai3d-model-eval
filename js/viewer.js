@@ -716,29 +716,51 @@ class ModelViewer {
   }
 
   /**
-   * Count truly unmerged vertex pairs — vertices at the same position that are
-   * NOT topologically connected (not attribute splits).
+   * Count truly unmerged vertices — vertices at the exact same position
+   * that belong to DIFFERENT connected components of the mesh graph.
    *
    * In BufferGeometry, one logical vertex may be split into multiple entries
    * (different normals / UVs) with identical position values. These are
-   * "属性拆分" (attribute splits) and should NOT be counted as unmerged.
+   * "属性拆分" (attribute splits) — they're in the same connected component
+   * (reachable through edges) and should NOT be counted.
    *
-   * True unmerged vertices are at the same position but belong to different
-   * topological regions (no shared edges/faces/neighbors).
+   * True unmerged vertices are at the same position but in different
+   * connected components (e.g., two separate mesh pieces touching at a point
+   * without being welded). Only these are counted.
    *
    * Algorithm:
-   * 1. Group vertices by position (with tolerance)
-   * 2. For each group, build connectivity using union-find:
-   *    - Two vertices are connected if they share a common neighbor
-   *      (a vertex that appears in faces/edges of both)
-   *    - Or if they are directly connected by an edge
-   * 3. Count extra connected components beyond the first = unmerged count
+   * 1. Build global Union-Find over ALL edges in the mesh
+   * 2. Group vertices by position (with tolerance)
+   * 3. For each group, count distinct connected components
+   * 4. Extra components beyond 1 = unmerged count
    */
   _countUnmergedVertices(positions, vertexNeighbors) {
+    const n = positions.length;
+
+    // Step 1: Build global Union-Find over all edges
+    const parent = new Array(n);
+    for (let i = 0; i < n; i++) parent[i] = i;
+
+    const find = (x) => {
+      while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+      return x;
+    };
+    const union = (a, b) => {
+      const ra = find(a), rb = find(b);
+      if (ra !== rb) parent[ra] = rb;
+    };
+
+    // Union all edges from the neighbor map
+    for (const [v, neighbors] of vertexNeighbors) {
+      for (const nb of neighbors) {
+        union(v, nb);
+      }
+    }
+
+    // Step 2: Group vertices by position (tolerance-based hashing)
     const tolerance = 1e-4;
     const positionMap = new Map();
-
-    for (let i = 0; i < positions.length; i++) {
+    for (let i = 0; i < n; i++) {
       const p = positions[i];
       const key = `${Math.round(p.x / tolerance)},${Math.round(p.y / tolerance)},${Math.round(p.z / tolerance)}`;
       if (!positionMap.has(key)) {
@@ -747,75 +769,23 @@ class ModelViewer {
       positionMap.get(key).push(i);
     }
 
+    // Step 3: For each position group, count distinct connected components
     let unmergedCount = 0;
-
     for (const [key, indices] of positionMap) {
       if (indices.length < 2) continue;
 
-      // Union-Find for this position group
-      const n = indices.length;
-      const parent = new Array(n);
-      for (let i = 0; i < n; i++) parent[i] = i;
-
-      const find = (x) => {
-        while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
-        return x;
-      };
-
-      const union = (a, b) => {
-        const ra = find(a), rb = find(b);
-        if (ra !== rb) parent[ra] = rb;
-      };
-
-      // Check connectivity between all pairs in this group
-      for (let i = 0; i < n; i++) {
-        const neighbors_i = vertexNeighbors.get(indices[i]);
-        if (!neighbors_i) continue;
-
-        for (let j = i + 1; j < n; j++) {
-          const neighbors_j = vertexNeighbors.get(indices[j]);
-          if (!neighbors_j) continue;
-
-          let connected = false;
-
-          // Check if directly connected by an edge
-          if (neighbors_i.has(indices[j])) {
-            connected = true;
-          }
-
-          // Check if they share a common neighbor vertex
-          if (!connected) {
-            // Iterate over the smaller set for efficiency
-            const smaller = neighbors_i.size <= neighbors_j.size ? neighbors_i : neighbors_j;
-            const larger = neighbors_i.size <= neighbors_j.size ? neighbors_j : neighbors_i;
-            for (const nb of smaller) {
-              if (larger.has(nb)) {
-                connected = true;
-                break;
-              }
-            }
-          }
-
-          if (connected) {
-            union(i, j);
-          }
-        }
-      }
-
-      // Count connected components
       const components = new Set();
-      for (let i = 0; i < n; i++) {
-        components.add(find(i));
+      for (const idx of indices) {
+        components.add(find(idx));
       }
 
-      // Unmerged = extra components beyond the first
-      // (first component = the "merged" group, extras = truly unmerged)
+      // Extra components = truly unmerged vertices at this position
       if (components.size > 1) {
         unmergedCount += components.size - 1;
       }
     }
 
-    console.log(`[未合并点-采集] 顶点数=${positions.length}, 唯一位置=${positionMap.size}, 真正未合并=${unmergedCount}`);
+    console.log(`[未合并点] 顶点数=${n}, 唯一位置=${positionMap.size}, 真正未合并=${unmergedCount}`);
     return unmergedCount;
   }
 
