@@ -70,7 +70,7 @@ class ModelViewer {
     this.scene = new THREE.Scene();
     this.scene.background = new THREE.Color(0x1e1e2e);
 
-    this.camera = new THREE.PerspectiveCamera(50, w / h, 0.01, 1000);
+    this.camera = new THREE.PerspectiveCamera(30, w / h, 0.01, 1000);
     this.camera.position.set(3, 2, 5);
 
     this.renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
@@ -97,6 +97,7 @@ class ModelViewer {
     this.scene.add(this.fillLight);
 
     this.gridHelper = new THREE.GridHelper(10, 20, 0x444466, 0x333344);
+    this.gridHelper.visible = false; // Hidden by default
     this.scene.add(this.gridHelper);
 
     this._resizeObserver = new ResizeObserver(() => this._onResize());
@@ -109,8 +110,9 @@ class ModelViewer {
     // Grid toggle button — sits next to the stats text
     this.gridToggleBtn = document.createElement('button');
     this.gridToggleBtn.className = 'grid-toggle-btn';
-    this.gridToggleBtn.textContent = '网格 ON';
+    this.gridToggleBtn.textContent = '网格 OFF';
     this.gridToggleBtn.title = '显示/隐藏地面网格';
+    this.gridToggleBtn.classList.add('grid-off');
     this.gridToggleBtn.addEventListener('click', () => this._toggleGrid());
     this.container.appendChild(this.gridToggleBtn);
   }
@@ -646,6 +648,9 @@ class ModelViewer {
     // Detect holes: edge triangles without corresponding faces (Issue 1: 破面检测)
     const holeCount = this._detectHoles(vertexNeighbors, allFaces);
 
+    // Compute smooth ratio for model smoothness evaluation (修改3)
+    const smoothRatio = this._computeSmoothRatio(positions, vertexNeighbors);
+
     // Calculate UV occupancy and shell count (Issue 4)
     let uvOccupancy = 0;
     let uvShellCount = 0;
@@ -728,6 +733,7 @@ class ModelViewer {
       uvOccupancy,
       uvShellCount,
       holeCount,
+      smoothRatio,
     };
   }
 
@@ -877,6 +883,111 @@ class ModelViewer {
 
     console.log(`[破面检测] 面数=${faces.length}, 检测到空洞=${holeCount}`);
     return holeCount;
+  }
+
+  /**
+   * Compute the smooth ratio — how much the model shrinks when Laplacian
+   * smoothing is applied. A model with good topology (proper edge flow,
+   * reasonable density) will shrink to 0.7-0.9x of its original size.
+   * Models with too many faces or poor topology will shrink more or less.
+   *
+   * Algorithm:
+   * 1. Compute original bounding box diagonal
+   * 2. Clone positions, apply Laplacian smoothing (move each vertex towards
+   *    the centroid of its neighbors) for 3 iterations
+   * 3. Compute smoothed bounding box diagonal
+   * 4. Return ratio = smoothed / original
+   */
+  _computeSmoothRatio(positions, vertexNeighbors) {
+    if (!positions || positions.length === 0 || !vertexNeighbors || vertexNeighbors.size === 0) {
+      return 1.0; // No data — no change
+    }
+
+    // Compute original bounding box diagonal
+    let oMinX = Infinity, oMaxX = -Infinity;
+    let oMinY = Infinity, oMaxY = -Infinity;
+    let oMinZ = Infinity, oMaxZ = -Infinity;
+    for (const p of positions) {
+      if (p.x < oMinX) oMinX = p.x;
+      if (p.x > oMaxX) oMaxX = p.x;
+      if (p.y < oMinY) oMinY = p.y;
+      if (p.y > oMaxY) oMaxY = p.y;
+      if (p.z < oMinZ) oMinZ = p.z;
+      if (p.z > oMaxZ) oMaxZ = p.z;
+    }
+    const origDiag = Math.sqrt(
+      (oMaxX - oMinX) ** 2 + (oMaxY - oMinY) ** 2 + (oMaxZ - oMinZ) ** 2
+    );
+    if (origDiag < 1e-8) return 1.0;
+
+    // Clone positions for smoothing
+    const smoothed = positions.map(p => ({ x: p.x, y: p.y, z: p.z }));
+
+    // Limit to first 50000 vertices for performance
+    const n = Math.min(smoothed.length, 50000);
+
+    // Laplacian smoothing: 3 iterations
+    const iterations = 3;
+    const blendFactor = 0.5; // Move 50% towards neighbor centroid
+
+    for (let iter = 0; iter < iterations; iter++) {
+      const newPositions = smoothed.map(p => ({ x: p.x, y: p.y, z: p.z }));
+
+      for (let i = 0; i < n; i++) {
+        const neighbors = vertexNeighbors.get(i);
+        if (!neighbors || neighbors.size === 0) continue;
+
+        // Compute centroid of neighbors
+        let cx = 0, cy = 0, cz = 0;
+        let count = 0;
+        for (const nb of neighbors) {
+          if (nb < smoothed.length) {
+            cx += smoothed[nb].x;
+            cy += smoothed[nb].y;
+            cz += smoothed[nb].z;
+            count++;
+          }
+        }
+
+        if (count === 0) continue;
+        cx /= count;
+        cy /= count;
+        cz /= count;
+
+        // Blend towards centroid
+        newPositions[i].x = smoothed[i].x + (cx - smoothed[i].x) * blendFactor;
+        newPositions[i].y = smoothed[i].y + (cy - smoothed[i].y) * blendFactor;
+        newPositions[i].z = smoothed[i].z + (cz - smoothed[i].z) * blendFactor;
+      }
+
+      // Update smoothed positions
+      for (let i = 0; i < n; i++) {
+        smoothed[i].x = newPositions[i].x;
+        smoothed[i].y = newPositions[i].y;
+        smoothed[i].z = newPositions[i].z;
+      }
+    }
+
+    // Compute smoothed bounding box diagonal
+    let sMinX = Infinity, sMaxX = -Infinity;
+    let sMinY = Infinity, sMaxY = -Infinity;
+    let sMinZ = Infinity, sMaxZ = -Infinity;
+    for (let i = 0; i < n; i++) {
+      const p = smoothed[i];
+      if (p.x < sMinX) sMinX = p.x;
+      if (p.x > sMaxX) sMaxX = p.x;
+      if (p.y < sMinY) sMinY = p.y;
+      if (p.y > sMaxY) sMaxY = p.y;
+      if (p.z < sMinZ) sMinZ = p.z;
+      if (p.z > sMaxZ) sMaxZ = p.z;
+    }
+    const smoothDiag = Math.sqrt(
+      (sMaxX - sMinX) ** 2 + (sMaxY - sMinY) ** 2 + (sMaxZ - sMinZ) ** 2
+    );
+
+    const ratio = smoothDiag / origDiag;
+    console.log(`[模型光滑度] 原始对角线=${origDiag.toFixed(4)}, 平滑后对角线=${smoothDiag.toFixed(4)}, 比值=${ratio.toFixed(4)}`);
+    return ratio;
   }
 
   /** Rasterize a UV triangle onto a grid for occupancy calculation */
