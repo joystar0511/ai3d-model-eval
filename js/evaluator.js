@@ -7,7 +7,7 @@
  * 3. 重合点 (Unmerged Vertices) - 10 (no deduction, recommendation tag only)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
- * 6. UV合理性 (UV Rationality) - 10 (occupancy ratio + shell count)
+ * 6. UV利用度 (UV Utilization) - 10
  * 7. 贴图细节与复杂性 (Texture Detail) - 10 (HSV bin analysis)
  * 8. 贴图色彩 (Texture Color) - 10 (brightness < 2 or > 253)
  * 9. 一致性与伪影 (Consistency & Artifacts) - 10 (model-space UV symmetry)
@@ -42,7 +42,7 @@ const DIMENSIONS = [
   { key: 'overlappingVerts',   name: '重合点',           max: 10 },
   { key: 'wireUniformity',     name: '布线均匀度',       max: 10 },
   { key: 'riggability',        name: '可绑定程度',       max: 10 },
-  { key: 'uvUtilization',      name: 'UV合理性',         max: 10 },
+  { key: 'uvUtilization',      name: 'UV利用度',         max: 10 },
   { key: 'textureDetail',      name: '贴图细节与复杂性',  max: 10 },
   { key: 'textureColor',       name: '贴图色彩',         max: 10 },
   { key: 'consistency',        name: '一致性与伪影',     max: 10 },
@@ -129,7 +129,7 @@ class ModelEvaluator {
       case 'overlappingVerts': return this._evalOverlappingVerts(geo);
       case 'wireUniformity': return this._evalWireUniformity(geo);
       case 'riggability': return this._evalRiggability(geo, isCharacterModel, ringLineData);
-      case 'uvUtilization': return this._evalUVRationality(geo);
+      case 'uvUtilization': return this._evalUVUtilization(geo);
       case 'textureDetail': return this._evalTextureDetail(tex);
       case 'textureColor': return this._evalTextureColor(tex);
       case 'consistency': return this._evalConsistency(geo, tex);
@@ -250,52 +250,74 @@ class ModelEvaluator {
   }
 
   /**
-   * UV合理性 (UV Rationality)
+   * UV利用度 (UV Utilization)
    *
-   * Scoring criteria: UV壳在[0,1]区间内的占比和切分合理性
-   *
-   * Step 1 — UV occupancy ratio (占比):
-   * - >80%: no deduction
-   * - 60%-80%: deduct 1 point per 1% below 80%
-   * - <60%: 0 points for this step
-   *
-   * Step 2 — UV shell count (切分合理性):
-   * - Base: 15 shells
-   * - <15: no deduction
-   * - >15: deduct 0.1 per extra shell
-   *
-   * Score = max(0, 10 - step1_deduction - step2_deduction)
-   *
-   * Uses pre-computed uvOccupancy and uvShellCount from geometryData.
+   * Uses actual UV data from the model:
+   * - Divide UV space [0,1]x[0,1] into a 32x32 grid
+   * - Count occupied cells (cells with at least one UV point)
+   * - Utilization ratio = occupied / total
+   * - Also checks for UVs outside [0,1] range (indicates poor layout)
+   * - Score based on utilization ratio: >80% = full, <60% = 0
    */
-  static _evalUVRationality(geo) {
+  static _evalUVUtilization(geo) {
     const max = RAW_MAX.uvUtilization;
-    if (!geo || !geo.hasUV) return max * 0.3;
+    if (!geo.hasUV) return max * 0.3;
 
-    const occupancy = geo.uvOccupancy || 0;
-    const shellCount = geo.uvShellCount || 0;
+    const uvs = geo.uvs;
+    if (!uvs || uvs.length === 0) return max * 0.3;
 
-    let score = max;
+    // 32x32 grid in UV space
+    const gridSize = 32;
+    const grid = new Set();
+    let outOfRangeCount = 0;
+    let validCount = 0;
 
-    // Step 1: UV occupancy ratio
-    if (occupancy > 0.8) {
-      // No deduction
-    } else if (occupancy > 0.6) {
-      // Deduct 1 point per 1% below 80%
-      const deficitPercent = (0.8 - occupancy) * 100;
-      score -= deficitPercent * 1;
+    for (let i = 0; i < uvs.length; i++) {
+      const uv = uvs[i];
+      if (!uv) continue;
+      validCount++;
+
+      const u = uv.u;
+      const v = uv.v;
+
+      // Check if UV is outside [0,1] range
+      if (u < -0.001 || u > 1.001 || v < -0.001 || v > 1.001) {
+        outOfRangeCount++;
+      }
+
+      // Clamp to grid
+      const gu = Math.max(0, Math.min(gridSize - 1, Math.floor(u * gridSize)));
+      const gv = Math.max(0, Math.min(gridSize - 1, Math.floor(v * gridSize)));
+      grid.add(gu * gridSize + gv);
+    }
+
+    if (validCount === 0) return max * 0.3;
+
+    const totalCells = gridSize * gridSize;
+    const occupiedCells = grid.size;
+    const utilizationRatio = occupiedCells / totalCells;
+
+    // Out-of-range UVs indicate poor layout
+    const outOfRangeRatio = outOfRangeCount / validCount;
+
+    // Score: utilization > 80% = full marks
+    // utilization 60-80% = proportional
+    // utilization < 60% = 0
+    let score;
+    if (utilizationRatio > 0.8) {
+      score = max;
+    } else if (utilizationRatio > 0.6) {
+      score = max * ((utilizationRatio - 0.6) / 0.2);
     } else {
-      // <60% → 0 points
       score = 0;
     }
 
-    // Step 2: UV shell count (only apply if score > 0 from step 1)
-    if (score > 0 && shellCount > 15) {
-      const extraShells = shellCount - 15;
-      score -= extraShells * 0.1;
+    // Penalty for out-of-range UVs (max 30% of score)
+    if (outOfRangeRatio > 0) {
+      const penalty = Math.min(outOfRangeRatio * 0.5, 0.3) * max;
+      score = Math.max(score - penalty, 0);
     }
 
-    console.log(`[UV合理性] 占比=${(occupancy * 100).toFixed(1)}%, UV壳数=${shellCount}, 得分=${Math.max(score, 0).toFixed(2)}`);
     return Math.max(score, 0);
   }
 
@@ -839,11 +861,11 @@ class ModelEvaluator {
 
     const uvScore = scores.uvUtilization;
     if (uvScore >= 8) {
-      analyses.push({ title: 'UV展开', content: 'UV合理性良好，UV壳在[0,1]空间内占比合理且切分数量适中。' });
+      analyses.push({ title: 'UV展开', content: 'UV利用率良好，UV壳在UV空间内分布合理。' });
     } else if (uvScore >= 5) {
-      analyses.push({ title: 'UV展开', content: 'UV合理性一般，UV壳占比或切分数量有待优化。' });
+      analyses.push({ title: 'UV展开', content: 'UV利用率一般，部分UV壳可能存在重叠或浪费空间的情况。' });
     } else {
-      analyses.push({ title: 'UV展开', content: 'UV合理性较低，建议优化UV壳在[0,1]空间的占比或减少不必要的UV切分。' });
+      analyses.push({ title: 'UV展开', content: 'UV利用率较低，建议重新进行UV展开以优化空间利用率。' });
     }
 
     // Model smoothness analysis
@@ -965,6 +987,71 @@ class ModelEvaluator {
 
   static _delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Generate usage recommendation tags based on evaluation scores.
+   *
+   * Tag criteria (from Excel spec):
+   * - 次世代游戏: 材质合理性>6, 模型光滑度>8, UV利用度>9, 法线贴图质量>8, 其他项>3
+   * - 手绘游戏: 贴图细节与复杂性>8, 其他项>3
+   * - 3D打印: 模型光滑度>9, 其他项>3
+   * - 影视动画: 所有项>9
+   *
+   * A model can match multiple tags — all matching tags are returned.
+   *
+   * @param {Array} breakdown - The breakdown array from evaluation result
+   * @returns {Array} Array of { label, color } objects
+   */
+  static generateUsageTags(breakdown) {
+    if (!breakdown || !Array.isArray(breakdown)) return [];
+
+    const scores = {};
+    for (const item of breakdown) {
+      scores[item.key] = item.score;
+    }
+
+    const allKeys = DIMENSIONS.map(d => d.key);
+
+    // Helper: check if all dimensions NOT in excludeKeys meet the threshold
+    const checkOthers = (excludeKeys, threshold) => {
+      for (const key of allKeys) {
+        if (!excludeKeys.includes(key)) {
+          if (!(scores[key] > threshold)) return false;
+        }
+      }
+      return true;
+    };
+
+    const tags = [];
+
+    // 次世代游戏: 材质合理性>6, 模型光滑度>8, UV利用度>9, 法线贴图质量>8, 其他项>3
+    if (scores.materialRationality > 6 &&
+        scores.modelSmoothness > 8 &&
+        scores.uvUtilization > 9 &&
+        scores.normalMapQuality > 8 &&
+        checkOthers(['materialRationality', 'modelSmoothness', 'uvUtilization', 'normalMapQuality'], 3)) {
+      tags.push({ label: '次世代游戏', color: 'blue' });
+    }
+
+    // 手绘游戏: 贴图细节与复杂性>8, 其他项>3
+    if (scores.textureDetail > 8 &&
+        checkOthers(['textureDetail'], 3)) {
+      tags.push({ label: '手绘游戏', color: 'green' });
+    }
+
+    // 3D打印: 模型光滑度>9, 其他项>3
+    if (scores.modelSmoothness > 9 &&
+        checkOthers(['modelSmoothness'], 3)) {
+      tags.push({ label: '3D打印', color: 'purple' });
+    }
+
+    // 影视动画: 所有项>9
+    if (allKeys.every(key => scores[key] > 9)) {
+      tags.push({ label: '影视动画', color: 'gold' });
+    }
+
+    return tags;
   }
 }
 
