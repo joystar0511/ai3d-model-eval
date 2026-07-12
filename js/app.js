@@ -1018,7 +1018,7 @@ class App {
     // 4. UV analysis
     const uvShells = meta.uvShellCount || 0;
     if (uvShells > 200) {
-      sentences.push(`<strong style="color:var(--gold);">⚠ UV壳数量达到 ${uvShells} 个，超过200个的合理上限，UV排布不合理，需要重新分UV。</strong>`);
+      sentences.push(`UV壳数量达到 ${uvShells} 个，超过200个的合理上限，UV排布不合理，需要重新分UV。`);
     } else if (meta.uvScore >= 8) {
       sentences.push(`UV合理性表现良好（${meta.uvScore.toFixed(1)}/10），UV壳数量为 ${uvShells} 个，排布合理。`);
     } else if (meta.uvScore >= 5) {
@@ -1118,16 +1118,22 @@ class App {
       labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="#e8eaf0" font-size="13" font-weight="600">${models[0].dims[i].name}</text>`;
     }
 
-    // Polygons for each model (up to 3)
+    // Polygons for each model (up to 8, all uploaded models)
     const colorMap = {
       blue:   { stroke: '#3b82f6', fill: 'rgba(59,130,246,0.12)' },
       red:    { stroke: '#ef4444', fill: 'rgba(239,68,68,0.12)' },
       green:  { stroke: '#22c55e', fill: 'rgba(34,197,94,0.12)' },
+      purple: { stroke: '#a855f7', fill: 'rgba(168,85,247,0.12)' },
+      amber:  { stroke: '#f59e0b', fill: 'rgba(245,158,11,0.12)' },
+      cyan:   { stroke: '#06b6d4', fill: 'rgba(6,182,212,0.12)' },
+      pink:   { stroke: '#ec4899', fill: 'rgba(236,72,153,0.12)' },
+      lime:   { stroke: '#84cc16', fill: 'rgba(132,204,22,0.12)' },
     };
-    const colorKeys = ['blue', 'red', 'green'];
+    const colorKeys = ['blue', 'red', 'green', 'purple', 'amber', 'cyan', 'pink', 'lime'];
 
     let polygons = '';
     let scoreLabels = '';
+    const showScoreLabels = models.length <= 4;
     models.forEach((model, mIdx) => {
       const ck = colorKeys[mIdx] || 'blue';
       const c = colorMap[ck];
@@ -1135,10 +1141,17 @@ class App {
       for (let i = 0; i < n; i++) {
         const [x, y] = pointAt(i, model.dims[i].score);
         pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
-        // Score label offset varies by model index
-        const offsetY = mIdx === 0 ? -8 : (mIdx === 1 ? 12 : 0);
-        const offsetX = mIdx === 2 ? 14 : 0;
-        scoreLabels += `<text x="${(x + offsetX).toFixed(1)}" y="${(y + offsetY).toFixed(1)}" text-anchor="middle" fill="${c.stroke}" font-size="10" font-weight="600">${model.dims[i].score.toFixed(1)}</text>`;
+        if (showScoreLabels) {
+          // Offset score labels by model index to reduce overlap
+          const offsets = [
+            { x: 0, y: -10 },
+            { x: 0, y: 14 },
+            { x: 16, y: 0 },
+            { x: -16, y: 0 },
+          ];
+          const off = offsets[mIdx] || { x: 0, y: 0 };
+          scoreLabels += `<text x="${(x + off.x).toFixed(1)}" y="${(y + off.y).toFixed(1)}" text-anchor="middle" fill="${c.stroke}" font-size="10" font-weight="600">${model.dims[i].score.toFixed(1)}</text>`;
+        }
       }
       polygons += `<polygon points="${pts.join(' ')}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2"/>`;
     });
@@ -1190,27 +1203,35 @@ class App {
     const modelColors = ['#3b82f6', '#ef4444', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4', '#ec4899', '#84cc16'];
     const colorNames = ['blue', 'red', 'green', 'purple', 'amber', 'cyan', 'pink', 'lime'];
 
-    // Radar chart: show top 3 models
-    const radarModels = allModels.slice(0, 3).map((m, i) => ({
+    // Radar chart: show ALL models
+    const radarModels = allModels.map((m, i) => ({
       dims: ModelEvaluator.computeSixDimensions(m.result.breakdown),
       name: m.name,
       color: colorNames[i],
     }));
     const radarSVG = this._generateRadarChartSVG(radarModels);
 
-    // Build model cards (all models, horizontal scroll)
-    const modelCardsHTML = allModels.map((m, i) => {
+    // Build radar legend (all models)
+    const radarLegendHTML = allModels.map((m, i) => {
+      const color = modelColors[i];
+      return `<span style="display:flex;align-items:center;gap:8px;">
+        <span style="display:inline-block;width:14px;height:14px;background:${color};border-radius:3px;"></span>
+        <span style="font-size:14px;font-weight:600;">${m.name}</span>
+      </span>`;
+    }).join('');
+    const modelRowHTML = allModels.map((m, i) => {
       const color = modelColors[i] || modelColors[0];
       const isWinner = i === 0 && allModels.length > 1 && m.result.totalScore > allModels[1].result.totalScore;
       const isChar = m.result.isCharacterModel;
-      const charBadge = isChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
       return `
-        <div class="pk-card" style="border-top:3px solid ${color};">
-          ${isWinner ? '<div class="pk-winner-badge">优胜者</div>' : ''}
-          <div class="pk-rank-badge" style="color:${color};">#${i + 1}</div>
-          <div class="pk-model-name">${m.name}</div>
-          ${charBadge}
-          <div class="pk-model-score" style="color:${color};">${m.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
+        <div class="pk-card-compact" style="border-left:3px solid ${color};">
+          <span class="pk-cc-dot" style="background:${color};"></span>
+          <span class="pk-cc-rank" style="color:${color};">#${i + 1}</span>
+          <span class="pk-cc-name">${m.name}</span>
+          ${isChar ? '<span class="pk-cc-char">👤</span>' : ''}
+          <span class="pk-cc-score" style="color:${color};">${m.result.totalScore.toFixed(2)}</span>
+          <span class="pk-cc-unit">/100</span>
+          ${isWinner ? '<span class="pk-cc-winner">优胜</span>' : ''}
         </div>
       `;
     }).join('');
@@ -1241,14 +1262,9 @@ class App {
       `;
     }).join('');
 
-    const scrollHint = allModels.length > 3 ? '<div class="pk-scroll-hint">← 横向滑动查看更多模型 →</div>' : '';
-
     this.pkSection.innerHTML = `
       <h2>Model PK - 对比评测</h2>
-      <div class="pk-cards-scroll">
-        <div class="pk-container">${modelCardsHTML}</div>
-      </div>
-      ${scrollHint}
+      <div class="pk-cards-row">${modelRowHTML}</div>
       <div style="margin-top:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px;">
         <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;justify-content:center;flex-wrap:wrap;">
           ${radarLegendHTML}
@@ -1457,29 +1473,33 @@ class App {
     const modelColors = ['#3b82f6', '#ef4444', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4', '#ec4899', '#84cc16'];
     const colorNames = ['blue', 'red', 'green', 'purple', 'amber', 'cyan', 'pink', 'lime'];
 
-    // Radar chart: top 3
-    const radarModels = allModels.slice(0, 3).map((m, i) => ({
+    // Radar chart: ALL models
+    const radarModels = allModels.map((m, i) => ({
       dims: ModelEvaluator.computeSixDimensions(m.result.breakdown),
       name: m.name,
       color: colorNames[i],
     }));
     const radarSVG = this._generateRadarChartSVG(radarModels);
 
-    // Model cards
-    const modelCardsHTML = allModels.map((m, i) => {
+    // Model row (compact, no scrolling)
+    const modelRowHTML = allModels.map((m, i) => {
       const color = modelColors[i] || modelColors[0];
       const isWinner = i === 0 && allModels.length > 1 && m.result.totalScore > allModels[1].result.totalScore;
+      const isChar = m.result.isCharacterModel;
       return `
-        <div class="pk-card" style="border-top:3px solid ${color};">
-          ${isWinner ? '<div class="pk-winner-badge">优胜者</div>' : ''}
-          <div class="pk-rank-badge" style="color:${color};">#${i + 1}</div>
-          <div class="pk-model-name">${m.name}</div>
-          <div class="pk-model-score" style="color:${color};">${m.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
+        <div class="pk-card-compact" style="border-left:3px solid ${color};">
+          <span class="pk-cc-dot" style="background:${color};"></span>
+          <span class="pk-cc-rank" style="color:${color};">#${i + 1}</span>
+          <span class="pk-cc-name">${m.name}</span>
+          ${isChar ? '<span class="pk-cc-char">👤</span>' : ''}
+          <span class="pk-cc-score" style="color:${color};">${m.result.totalScore.toFixed(2)}</span>
+          <span class="pk-cc-unit">/100</span>
+          ${isWinner ? '<span class="pk-cc-winner">优胜</span>' : ''}
         </div>
       `;
     }).join('');
 
-    const radarLegendHTML = radarModels.map((m, i) => {
+    const radarLegendHTML = allModels.map((m, i) => {
       const color = modelColors[i];
       return `<span style="display:flex;align-items:center;gap:8px;">
         <span style="display:inline-block;width:14px;height:14px;background:${color};border-radius:3px;"></span>
@@ -1553,10 +1573,7 @@ class App {
         <div class="full-report-content">
           <h2 style="font-size:24px;font-weight:800;margin-bottom:20px;text-align:center;">Model PK - 对比评测报告</h2>
 
-          <div class="pk-cards-scroll" style="margin-bottom:8px;">
-            <div class="pk-container">${modelCardsHTML}</div>
-          </div>
-          ${scrollHint}
+          <div class="pk-cards-row" style="margin-bottom:8px;">${modelRowHTML}</div>
 
           <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;">
             <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;justify-content:center;flex-wrap:wrap;">
