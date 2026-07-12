@@ -241,9 +241,11 @@ class App {
       return;
     }
 
+    const MAX_MODELS = 8;
     const files = Array.from(fileList);
     const supported = ['obj', 'fbx', 'gltf', 'glb', 'stl', 'ply', 'blend'];
     let validCount = 0;
+    let skippedCount = 0;
 
     for (const file of files) {
       const ext = file.name.split('.').pop().toLowerCase();
@@ -251,8 +253,16 @@ class App {
         this._showToast(`不支持的格式: ${file.name} (支持: ${supported.join(', ')})`, 'error');
         continue;
       }
+      if (this.models.length >= MAX_MODELS) {
+        skippedCount++;
+        continue;
+      }
       this._addModel(file);
       validCount++;
+    }
+
+    if (skippedCount > 0) {
+      this._showToast(`已达到上限 ${MAX_MODELS} 个模型，${skippedCount} 个文件未添加`, 'warn');
     }
 
     this.fileInput.value = '';
@@ -430,10 +440,21 @@ class App {
   }
 
   _updateUI() {
+    const MAX_MODELS = 8;
     if (this.models.length > 0) {
       this.initialUpload.style.display = 'none';
       this.splitButtons.style.display = 'flex';
       this.modelGrid.style.display = 'grid';
+      // Disable add button if at max capacity
+      if (this.models.length >= MAX_MODELS) {
+        this.btnAddMore.style.opacity = '0.5';
+        this.btnAddMore.style.pointerEvents = 'none';
+        this.btnAddMore.querySelector('span').textContent = `📂 已达上限 (${MAX_MODELS} 个)`;
+      } else {
+        this.btnAddMore.style.opacity = '';
+        this.btnAddMore.style.pointerEvents = '';
+        this.btnAddMore.querySelector('span').textContent = '📂 继续添加模型';
+      }
     } else {
       this.initialUpload.style.display = 'block';
       this.splitButtons.style.display = 'none';
@@ -1061,22 +1082,22 @@ class App {
 
   /**
    * Generate SVG radar chart for 6-dimension comparison.
-   * Each dimension is 0-10, with rings at 2/4/6/8/10.
+   * Supports 2-3 models overlaid with different colors.
+   * @param {Array} models - Array of { dims, name, color } objects
    */
-  _generateRadarChartSVG(dimsA, dimsB, nameA, nameB) {
+  _generateRadarChartSVG(models) {
     const cx = 200, cy = 200, r = 150;
-    const n = dimsA.length; // 6
+    const n = models[0].dims.length; // 6
     const angleStep = (Math.PI * 2) / n;
-    const startAngle = -Math.PI / 2; // Start from top
+    const startAngle = -Math.PI / 2;
 
-    // Helper: convert (dim index, score 0-10) to (x, y)
     const pointAt = (i, score) => {
       const angle = startAngle + i * angleStep;
       const dist = (score / 10) * r;
       return [cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist];
     };
 
-    // Generate grid rings (concentric polygons at 2, 4, 6, 8, 10)
+    // Grid rings
     let gridRings = '';
     for (const level of [2, 4, 6, 8, 10]) {
       const points = [];
@@ -1087,46 +1108,48 @@ class App {
       gridRings += `<polygon points="${points.join(' ')}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>`;
     }
 
-    // Generate axis lines and labels
+    // Axes + labels
     let axes = '';
     let labels = '';
     for (let i = 0; i < n; i++) {
       const [x, y] = pointAt(i, 10);
       axes += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>`;
-
-      // Label position (slightly outside the outer ring)
       const [lx, ly] = pointAt(i, 11.5);
-      const labelName = dimsA[i].name;
-      labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="#e8eaf0" font-size="13" font-weight="600">${labelName}</text>`;
-
-      // Score label
-      const [sx, sy] = pointAt(i, dimsA[i].score);
-      labels += `<text x="${sx.toFixed(1)}" y="${(sy - 8).toFixed(1)}" text-anchor="middle" fill="#60a5fa" font-size="10" font-weight="600">${dimsA[i].score.toFixed(1)}</text>`;
-      const [sx2, sy2] = pointAt(i, dimsB[i].score);
-      labels += `<text x="${sx2.toFixed(1)}" y="${(sy2 + 12).toFixed(1)}" text-anchor="middle" fill="#f87171" font-size="10" font-weight="600">${dimsB[i].score.toFixed(1)}</text>`;
+      labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="#e8eaf0" font-size="13" font-weight="600">${models[0].dims[i].name}</text>`;
     }
 
-    // Generate polygon A (blue)
-    const pointsA = [];
-    for (let i = 0; i < n; i++) {
-      const [x, y] = pointAt(i, dimsA[i].score);
-      pointsA.push(`${x.toFixed(1)},${y.toFixed(1)}`);
-    }
+    // Polygons for each model (up to 3)
+    const colorMap = {
+      blue:   { stroke: '#3b82f6', fill: 'rgba(59,130,246,0.12)' },
+      red:    { stroke: '#ef4444', fill: 'rgba(239,68,68,0.12)' },
+      green:  { stroke: '#22c55e', fill: 'rgba(34,197,94,0.12)' },
+    };
+    const colorKeys = ['blue', 'red', 'green'];
 
-    // Generate polygon B (red)
-    const pointsB = [];
-    for (let i = 0; i < n; i++) {
-      const [x, y] = pointAt(i, dimsB[i].score);
-      pointsB.push(`${x.toFixed(1)},${y.toFixed(1)}`);
-    }
+    let polygons = '';
+    let scoreLabels = '';
+    models.forEach((model, mIdx) => {
+      const ck = colorKeys[mIdx] || 'blue';
+      const c = colorMap[ck];
+      const pts = [];
+      for (let i = 0; i < n; i++) {
+        const [x, y] = pointAt(i, model.dims[i].score);
+        pts.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+        // Score label offset varies by model index
+        const offsetY = mIdx === 0 ? -8 : (mIdx === 1 ? 12 : 0);
+        const offsetX = mIdx === 2 ? 14 : 0;
+        scoreLabels += `<text x="${(x + offsetX).toFixed(1)}" y="${(y + offsetY).toFixed(1)}" text-anchor="middle" fill="${c.stroke}" font-size="10" font-weight="600">${model.dims[i].score.toFixed(1)}</text>`;
+      }
+      polygons += `<polygon points="${pts.join(' ')}" fill="${c.fill}" stroke="${c.stroke}" stroke-width="2"/>`;
+    });
 
     return `
       <svg viewBox="0 0 400 400" style="width:100%;max-width:400px;margin:0 auto;display:block;">
         ${gridRings}
         ${axes}
-        <polygon points="${pointsB.join(' ')}" fill="rgba(239,68,68,0.15)" stroke="#ef4444" stroke-width="2"/>
-        <polygon points="${pointsA.join(' ')}" fill="rgba(59,130,246,0.15)" stroke="#3b82f6" stroke-width="2"/>
+        ${polygons}
         ${labels}
+        ${scoreLabels}
       </svg>
     `;
   }
@@ -1163,71 +1186,78 @@ class App {
     );
     if (!pkData) return;
 
-    // Compute 6 macro dimensions for radar chart
-    const dimsWinner = ModelEvaluator.computeSixDimensions(pkData.winner.result.breakdown);
-    const dimsRunner = ModelEvaluator.computeSixDimensions(pkData.runner.result.breakdown);
+    const allModels = pkData.allModels;
+    const modelColors = ['#3b82f6', '#ef4444', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4', '#ec4899', '#84cc16'];
+    const colorNames = ['blue', 'red', 'green', 'purple', 'amber', 'cyan', 'pink', 'lime'];
 
-    const radarSVG = this._generateRadarChartSVG(
-      dimsWinner, dimsRunner,
-      pkData.winner.name, pkData.runner.name
-    );
+    // Radar chart: show top 3 models
+    const radarModels = allModels.slice(0, 3).map((m, i) => ({
+      dims: ModelEvaluator.computeSixDimensions(m.result.breakdown),
+      name: m.name,
+      color: colorNames[i],
+    }));
+    const radarSVG = this._generateRadarChartSVG(radarModels);
 
-    const winnerType = pkData.winnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
-    const runnerType = pkData.runnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
+    // Build model cards (all models, horizontal scroll)
+    const modelCardsHTML = allModels.map((m, i) => {
+      const color = modelColors[i] || modelColors[0];
+      const isWinner = i === 0 && allModels.length > 1 && m.result.totalScore > allModels[1].result.totalScore;
+      const isChar = m.result.isCharacterModel;
+      const charBadge = isChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
+      return `
+        <div class="pk-card" style="border-top:3px solid ${color};">
+          ${isWinner ? '<div class="pk-winner-badge">优胜者</div>' : ''}
+          <div class="pk-rank-badge" style="color:${color};">#${i + 1}</div>
+          <div class="pk-model-name">${m.name}</div>
+          ${charBadge}
+          <div class="pk-model-score" style="color:${color};">${m.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
+        </div>
+      `;
+    }).join('');
 
-    // Generate polished per-model summaries using the 8-section template
-    const winnerSummary = this._generateModelSummary(pkData.winner, pkData.winnerStrengths);
-    const runnerSummary = this._generateModelSummary(pkData.runner, pkData.runnerStrengths);
+    // Build radar legend
+    const radarLegendHTML = radarModels.map((m, i) => {
+      const color = modelColors[i];
+      return `<span style="display:flex;align-items:center;gap:8px;">
+        <span style="display:inline-block;width:14px;height:14px;background:${color};border-radius:3px;"></span>
+        <span style="font-size:14px;font-weight:600;">${m.name}</span>
+      </span>`;
+    }).join('');
+
+    // Build summary for ALL models
+    const summariesHTML = allModels.map((m, i) => {
+      const color = modelColors[i] || modelColors[0];
+      const summary = this._generateModelSummary(m, m.strengths);
+      return `
+        <div class="pk-summary-divider"></div>
+        <div class="pk-summary-model">
+          <div class="pk-summary-model-header">
+            <span class="pk-summary-model-name" style="color:${color};">#${i + 1} ${m.name}</span>
+            <span class="pk-summary-model-score">${m.result.totalScore.toFixed(2)} / 100</span>
+          </div>
+          <div class="pk-summary-tags">${summary.tagsHTML}</div>
+          <p class="pk-summary-analysis">${summary.analysisText}</p>
+        </div>
+      `;
+    }).join('');
+
+    const scrollHint = allModels.length > 3 ? '<div class="pk-scroll-hint">← 横向滑动查看更多模型 →</div>' : '';
 
     this.pkSection.innerHTML = `
       <h2>Model PK - 对比评测</h2>
-      <div class="pk-container">
-        <div class="pk-card">
-          ${pkData.winner.result.totalScore > pkData.runner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
-          <div class="pk-model-name">${pkData.winner.name}</div>
-          ${winnerType}
-          <div class="pk-model-score">${pkData.winner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
-        </div>
-        <div class="pk-card">
-          ${pkData.runner.result.totalScore > pkData.winner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
-          <div class="pk-model-name">${pkData.runner.name}</div>
-          ${runnerType}
-          <div class="pk-model-score">${pkData.runner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
-        </div>
+      <div class="pk-cards-scroll">
+        <div class="pk-container">${modelCardsHTML}</div>
       </div>
+      ${scrollHint}
       <div style="margin-top:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px;">
-        <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;justify-content:center;">
-          <span style="display:flex;align-items:center;gap:8px;">
-            <span style="display:inline-block;width:14px;height:14px;background:#3b82f6;border-radius:3px;"></span>
-            <span style="font-size:14px;font-weight:600;">${pkData.winner.name}</span>
-          </span>
-          <span style="display:flex;align-items:center;gap:8px;">
-            <span style="display:inline-block;width:14px;height:14px;background:#ef4444;border-radius:3px;"></span>
-            <span style="font-size:14px;font-weight:600;">${pkData.runner.name}</span>
-          </span>
+        <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;justify-content:center;flex-wrap:wrap;">
+          ${radarLegendHTML}
         </div>
         <div class="pk-radar-container">${radarSVG}</div>
       </div>
       <div class="pk-summary-section">
         <h3 class="pk-summary-title">📋 对比分析摘要</h3>
-        <div class="pk-summary-divider"></div>
-        <div class="pk-summary-model">
-          <div class="pk-summary-model-header">
-            <span class="pk-summary-model-name" style="color:#3b82f6;">${pkData.winner.name}</span>
-            <span class="pk-summary-model-score">${pkData.winner.result.totalScore.toFixed(2)} / 100</span>
-          </div>
-          <div class="pk-summary-tags">${winnerSummary.tagsHTML}</div>
-          <p class="pk-summary-analysis">${winnerSummary.analysisText}</p>
-        </div>
-        <div class="pk-summary-divider"></div>
-        <div class="pk-summary-model">
-          <div class="pk-summary-model-header">
-            <span class="pk-summary-model-name" style="color:#ef4444;">${pkData.runner.name}</span>
-            <span class="pk-summary-model-score">${pkData.runner.result.totalScore.toFixed(2)} / 100</span>
-          </div>
-          <div class="pk-summary-tags">${runnerSummary.tagsHTML}</div>
-          <p class="pk-summary-analysis">${runnerSummary.analysisText}</p>
-        </div>
+        ${summariesHTML}
       </div>
       <div style="text-align:center;margin-top:16px;">
         <button class="btn btn-outline btn-sm" id="viewFullPKBtn">
@@ -1423,13 +1453,75 @@ class App {
     );
     if (!pkData) return;
 
-    const dimsWinner = ModelEvaluator.computeSixDimensions(pkData.winner.result.breakdown);
-    const dimsRunner = ModelEvaluator.computeSixDimensions(pkData.runner.result.breakdown);
-    const radarSVG = this._generateRadarChartSVG(dimsWinner, dimsRunner, pkData.winner.name, pkData.runner.name);
+    const allModels = pkData.allModels;
+    const modelColors = ['#3b82f6', '#ef4444', '#22c55e', '#a855f7', '#f59e0b', '#06b6d4', '#ec4899', '#84cc16'];
+    const colorNames = ['blue', 'red', 'green', 'purple', 'amber', 'cyan', 'pink', 'lime'];
 
-    // Generate polished per-model summaries using the 8-section template
-    const winnerSummary = this._generateModelSummary(pkData.winner, pkData.winnerStrengths);
-    const runnerSummary = this._generateModelSummary(pkData.runner, pkData.runnerStrengths);
+    // Radar chart: top 3
+    const radarModels = allModels.slice(0, 3).map((m, i) => ({
+      dims: ModelEvaluator.computeSixDimensions(m.result.breakdown),
+      name: m.name,
+      color: colorNames[i],
+    }));
+    const radarSVG = this._generateRadarChartSVG(radarModels);
+
+    // Model cards
+    const modelCardsHTML = allModels.map((m, i) => {
+      const color = modelColors[i] || modelColors[0];
+      const isWinner = i === 0 && allModels.length > 1 && m.result.totalScore > allModels[1].result.totalScore;
+      return `
+        <div class="pk-card" style="border-top:3px solid ${color};">
+          ${isWinner ? '<div class="pk-winner-badge">优胜者</div>' : ''}
+          <div class="pk-rank-badge" style="color:${color};">#${i + 1}</div>
+          <div class="pk-model-name">${m.name}</div>
+          <div class="pk-model-score" style="color:${color};">${m.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
+        </div>
+      `;
+    }).join('');
+
+    const radarLegendHTML = radarModels.map((m, i) => {
+      const color = modelColors[i];
+      return `<span style="display:flex;align-items:center;gap:8px;">
+        <span style="display:inline-block;width:14px;height:14px;background:${color};border-radius:3px;"></span>
+        <span style="font-size:14px;font-weight:600;">${m.name}</span>
+      </span>`;
+    }).join('');
+
+    // Summaries for ALL models
+    const summariesHTML = allModels.map((m, i) => {
+      const color = modelColors[i] || modelColors[0];
+      const summary = this._generateModelSummary(m, m.strengths);
+      return `
+        <div class="pk-summary-divider"></div>
+        <div class="pk-summary-model">
+          <div class="pk-summary-model-header">
+            <span class="pk-summary-model-name" style="color:${color};">#${i + 1} ${m.name}</span>
+            <span class="pk-summary-model-score">${m.result.totalScore.toFixed(2)} / 100</span>
+          </div>
+          <div class="pk-summary-tags">${summary.tagsHTML}</div>
+          <p class="pk-summary-analysis">${summary.analysisText}</p>
+        </div>
+      `;
+    }).join('');
+
+    // Six-dimension detail comparison for ALL models
+    const allDims = allModels.map(m => ModelEvaluator.computeSixDimensions(m.result.breakdown));
+    const dimDetailHTML = allDims[0].map((d, di) => {
+      const barsHTML = allModels.map((md, mi) => {
+        const color = modelColors[mi] || modelColors[0];
+        const score = md[di].score;
+        return `<div class="detail-score-item">
+          <span class="detail-item-name">${mi === 0 ? d.name : ''}</span>
+          <div class="detail-item-bar-outer">
+            <div class="detail-item-bar-inner" style="width:${(score/10)*100}%;background:${color};"></div>
+          </div>
+          <span class="detail-item-score" style="color:${color};">${score.toFixed(2)}</span>
+        </div>`;
+      }).join('');
+      return barsHTML;
+    }).join('');
+
+    const scrollHint = allModels.length > 3 ? '<div class="pk-scroll-hint">← 横向滑动查看更多模型 →</div>' : '';
 
     // Remove any existing overlay
     const existing = document.getElementById('fullReportOverlay');
@@ -1461,74 +1553,27 @@ class App {
         <div class="full-report-content">
           <h2 style="font-size:24px;font-weight:800;margin-bottom:20px;text-align:center;">Model PK - 对比评测报告</h2>
 
-          <div class="pk-container" style="margin-bottom:24px;">
-            <div class="pk-card">
-              ${pkData.winner.result.totalScore > pkData.runner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
-              <div class="pk-model-name">${pkData.winner.name}</div>
-              <div class="pk-model-score">${pkData.winner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
-            </div>
-            <div class="pk-card">
-              ${pkData.runner.result.totalScore > pkData.winner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
-              <div class="pk-model-name">${pkData.runner.name}</div>
-              <div class="pk-model-score">${pkData.runner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
-            </div>
+          <div class="pk-cards-scroll" style="margin-bottom:8px;">
+            <div class="pk-container">${modelCardsHTML}</div>
           </div>
+          ${scrollHint}
 
           <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;">
-            <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;justify-content:center;">
-              <span style="display:flex;align-items:center;gap:8px;">
-                <span style="display:inline-block;width:14px;height:14px;background:#3b82f6;border-radius:3px;"></span>
-                <span style="font-size:14px;font-weight:600;">${pkData.winner.name}</span>
-              </span>
-              <span style="display:flex;align-items:center;gap:8px;">
-                <span style="display:inline-block;width:14px;height:14px;background:#ef4444;border-radius:3px;"></span>
-                <span style="font-size:14px;font-weight:600;">${pkData.runner.name}</span>
-              </span>
+            <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;justify-content:center;flex-wrap:wrap;">
+              ${radarLegendHTML}
             </div>
             <div class="pk-radar-container">${radarSVG}</div>
           </div>
 
           <div class="pk-summary-section" style="margin-bottom:20px;">
             <h3 class="pk-summary-title">📋 对比分析摘要</h3>
-            <div class="pk-summary-divider"></div>
-            <div class="pk-summary-model">
-              <div class="pk-summary-model-header">
-                <span class="pk-summary-model-name" style="color:#3b82f6;">${pkData.winner.name}</span>
-                <span class="pk-summary-model-score">${pkData.winner.result.totalScore.toFixed(2)} / 100</span>
-              </div>
-              <div class="pk-summary-tags">${winnerSummary.tagsHTML}</div>
-              <p class="pk-summary-analysis">${winnerSummary.analysisText}</p>
-            </div>
-            <div class="pk-summary-divider"></div>
-            <div class="pk-summary-model">
-              <div class="pk-summary-model-header">
-                <span class="pk-summary-model-name" style="color:#ef4444;">${pkData.runner.name}</span>
-                <span class="pk-summary-model-score">${pkData.runner.result.totalScore.toFixed(2)} / 100</span>
-              </div>
-              <div class="pk-summary-tags">${runnerSummary.tagsHTML}</div>
-              <p class="pk-summary-analysis">${runnerSummary.analysisText}</p>
-            </div>
+            ${summariesHTML}
           </div>
 
           <!-- Detailed dimension comparison -->
           <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
             <h3 style="font-size:16px;font-weight:700;margin-bottom:16px;color:var(--text);">六维详细对比</h3>
-            ${dimsWinner.map((d, i) => `
-              <div class="detail-score-item">
-                <span class="detail-item-name">${d.name}</span>
-                <div class="detail-item-bar-outer">
-                  <div class="detail-item-bar-inner" style="width:${(d.score/10)*100}%;background:#3b82f6;"></div>
-                </div>
-                <span class="detail-item-score" style="color:#60a5fa;">${d.score.toFixed(2)}</span>
-              </div>
-              <div class="detail-score-item">
-                <span class="detail-item-name"></span>
-                <div class="detail-item-bar-outer">
-                  <div class="detail-item-bar-inner" style="width:${(dimsRunner[i].score/10)*100}%;background:#ef4444;"></div>
-                </div>
-                <span class="detail-item-score" style="color:#f87171;">${dimsRunner[i].score.toFixed(2)}</span>
-              </div>
-            `).join('')}
+            ${dimDetailHTML}
           </div>
         </div>
       </div>
