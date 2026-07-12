@@ -55,8 +55,11 @@ class ModelViewer {
       emission: null,
     };
 
+    this._isLoading = true;
     this._initThree();
-    this._loadModel();
+    this._loadModel().finally(() => {
+      this._isLoading = false;
+    });
     this._animate();
   }
 
@@ -510,6 +513,12 @@ class ModelViewer {
     const faceNormals = [];
     let hasUV = false;
 
+    // Vertex neighbors map (for unmerged vertex detection and UV shell counting)
+    const vertexNeighbors = new Map();
+    // UV faces for occupancy calculation
+    const uvFaces = [];
+    let vertexOffset = 0;
+
     for (const mesh of meshes) {
       const geo = mesh.geometry;
       if (!geo) continue;
@@ -555,6 +564,26 @@ class ModelViewer {
           const e2 = new THREE.Vector3().subVectors(vc, va);
           normal.crossVectors(e1, e2).normalize();
           faceNormals.push(normal);
+
+          // Build vertex neighbors for topological connectivity (Issue 2)
+          if (a < posLimit && b < posLimit) {
+            this._addNeighbor(vertexNeighbors, a + vertexOffset, b + vertexOffset);
+          }
+          if (b < posLimit && c < posLimit) {
+            this._addNeighbor(vertexNeighbors, b + vertexOffset, c + vertexOffset);
+          }
+          if (c < posLimit && a < posLimit) {
+            this._addNeighbor(vertexNeighbors, c + vertexOffset, a + vertexOffset);
+          }
+
+          // Collect UV faces for occupancy calculation (Issue 4)
+          if (uvAttr && a < uvAttr.count && b < uvAttr.count && c < uvAttr.count) {
+            uvFaces.push([
+              { u: uvAttr.getX(a), v: uvAttr.getY(a) },
+              { u: uvAttr.getX(b), v: uvAttr.getY(b) },
+              { u: uvAttr.getX(c), v: uvAttr.getY(c) },
+            ]);
+          }
         }
       } else {
         totalFaces += posAttr.count / 3;
@@ -570,19 +599,99 @@ class ModelViewer {
           const e2 = new THREE.Vector3().subVectors(vc, va);
           normal.crossVectors(e1, e2).normalize();
           faceNormals.push(normal);
+
+          // Build vertex neighbors
+          if (i + 2 < posLimit) {
+            this._addNeighbor(vertexNeighbors, i + vertexOffset, (i + 1) + vertexOffset);
+            this._addNeighbor(vertexNeighbors, (i + 1) + vertexOffset, (i + 2) + vertexOffset);
+            this._addNeighbor(vertexNeighbors, (i + 2) + vertexOffset, i + vertexOffset);
+          }
+
+          // Collect UV faces
+          if (uvAttr && i + 2 < uvAttr.count) {
+            uvFaces.push([
+              { u: uvAttr.getX(i), v: uvAttr.getY(i) },
+              { u: uvAttr.getX(i + 1), v: uvAttr.getY(i + 1) },
+              { u: uvAttr.getX(i + 2), v: uvAttr.getY(i + 2) },
+            ]);
+          }
         }
       }
 
       if (geo.attributes.uv) {
         hasUV = true;
       }
+
+      vertexOffset += posLimit;
     }
 
     totalEdges = edgeLengths.length;
 
-    // Count unmerged vertices (exact same position) using hash map
-    const unmergedPairs = this._countUnmergedVertices(positions);
+    // Count truly unmerged vertices using topological connectivity (Issue 2)
+    const unmergedPairs = this._countUnmergedVertices(positions, vertexNeighbors);
     const hiddenFaces = this._findHiddenFaces(faceNormals);
+
+    // Calculate UV occupancy and shell count (Issue 4)
+    let uvOccupancy = 0;
+    let uvShellCount = 0;
+    if (hasUV && uvFaces.length > 0) {
+      // UV occupancy: rasterize UV triangles onto a 64x64 grid
+      const uvGridSize = 64;
+      const uvGrid = new Uint8Array(uvGridSize * uvGridSize);
+      for (const face of uvFaces) {
+        const [ua, ub, uc] = face;
+        // Only rasterize triangles with all UVs in [0,1] range
+        if (ua.u >= 0 && ua.u <= 1 && ua.v >= 0 && ua.v <= 1 &&
+            ub.u >= 0 && ub.u <= 1 && ub.v >= 0 && ub.v <= 1 &&
+            uc.u >= 0 && uc.u <= 1 && uc.v >= 0 && uc.v <= 1) {
+          this._rasterizeUVTriangle(uvGrid, uvGridSize, ua, ub, uc);
+        }
+      }
+      let occupiedCells = 0;
+      for (let i = 0; i < uvGrid.length; i++) {
+        if (uvGrid[i]) occupiedCells++;
+      }
+      uvOccupancy = occupiedCells / (uvGridSize * uvGridSize);
+
+      // UV shell count: connected components of vertex graph
+      // In BufferGeometry, UV seams create vertex splits, so counting
+      // connected components through shared edges gives the UV shell count
+      const totalVerts = positions.length;
+      const ufParent = new Array(totalVerts);
+      for (let i = 0; i < totalVerts; i++) ufParent[i] = i;
+
+      const ufFind = (x) => {
+        while (ufParent[x] !== x) { ufParent[x] = ufParent[ufParent[x]]; x = ufParent[x]; }
+        return x;
+      };
+      const ufUnion = (a, b) => {
+        const ra = ufFind(a), rb = ufFind(b);
+        if (ra !== rb) ufParent[ra] = rb;
+      };
+
+      for (const [v, neighbors] of vertexNeighbors) {
+        for (const nb of neighbors) {
+          ufUnion(v, nb);
+        }
+      }
+
+      // Group by root, check if component has UVs in [0,1] range
+      const shellMap = new Map();
+      for (let i = 0; i < totalVerts; i++) {
+        const root = ufFind(i);
+        if (!shellMap.has(root)) {
+          shellMap.set(root, { hasValidUV: false });
+        }
+        const uv = uvs[i];
+        if (uv && uv.u >= 0 && uv.u <= 1 && uv.v >= 0 && uv.v <= 1) {
+          shellMap.get(root).hasValidUV = true;
+        }
+      }
+
+      for (const shell of shellMap.values()) {
+        if (shell.hasValidUV) uvShellCount++;
+      }
+    }
 
     const avgEdgeLength = edgeLengths.reduce((a, b) => a + b, 0) / Math.max(edgeLengths.length, 1);
     const edgeLengthVariance = edgeLengths.reduce((sum, len) => sum + Math.pow(len - avgEdgeLength, 2), 0) / Math.max(edgeLengths.length, 1);
@@ -601,34 +710,155 @@ class ModelViewer {
       edgeLengthVariance,
       hasUV,
       meshes: meshes.length,
+      uvOccupancy,
+      uvShellCount,
     };
   }
 
   /**
-   * Count unmerged vertex pairs — vertices at the EXACT same position.
+   * Count truly unmerged vertex pairs — vertices at the same position that are
+   * NOT topologically connected (not attribute splits).
    *
    * In BufferGeometry, one logical vertex may be split into multiple entries
    * (different normals / UVs) with identical position values. These are
-   * "未合并点" (unmerged vertices). Each pair deducts 0.05 points.
+   * "属性拆分" (attribute splits) and should NOT be counted as unmerged.
    *
-   * Uses exact coordinate string matching (EPS = 0).
+   * True unmerged vertices are at the same position but belong to different
+   * topological regions (no shared edges/faces/neighbors).
+   *
+   * Algorithm:
+   * 1. Group vertices by position (with tolerance)
+   * 2. For each group, build connectivity using union-find:
+   *    - Two vertices are connected if they share a common neighbor
+   *      (a vertex that appears in faces/edges of both)
+   *    - Or if they are directly connected by an edge
+   * 3. Count extra connected components beyond the first = unmerged count
    */
-  _countUnmergedVertices(positions) {
+  _countUnmergedVertices(positions, vertexNeighbors) {
+    const tolerance = 1e-4;
     const positionMap = new Map();
-    let pairCount = 0;
 
     for (let i = 0; i < positions.length; i++) {
       const p = positions[i];
-      const key = `${p.x},${p.y},${p.z}`;
-      if (positionMap.has(key)) {
-        pairCount++;
-      } else {
-        positionMap.set(key, i);
+      const key = `${Math.round(p.x / tolerance)},${Math.round(p.y / tolerance)},${Math.round(p.z / tolerance)}`;
+      if (!positionMap.has(key)) {
+        positionMap.set(key, []);
+      }
+      positionMap.get(key).push(i);
+    }
+
+    let unmergedCount = 0;
+
+    for (const [key, indices] of positionMap) {
+      if (indices.length < 2) continue;
+
+      // Union-Find for this position group
+      const n = indices.length;
+      const parent = new Array(n);
+      for (let i = 0; i < n; i++) parent[i] = i;
+
+      const find = (x) => {
+        while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; }
+        return x;
+      };
+
+      const union = (a, b) => {
+        const ra = find(a), rb = find(b);
+        if (ra !== rb) parent[ra] = rb;
+      };
+
+      // Check connectivity between all pairs in this group
+      for (let i = 0; i < n; i++) {
+        const neighbors_i = vertexNeighbors.get(indices[i]);
+        if (!neighbors_i) continue;
+
+        for (let j = i + 1; j < n; j++) {
+          const neighbors_j = vertexNeighbors.get(indices[j]);
+          if (!neighbors_j) continue;
+
+          let connected = false;
+
+          // Check if directly connected by an edge
+          if (neighbors_i.has(indices[j])) {
+            connected = true;
+          }
+
+          // Check if they share a common neighbor vertex
+          if (!connected) {
+            // Iterate over the smaller set for efficiency
+            const smaller = neighbors_i.size <= neighbors_j.size ? neighbors_i : neighbors_j;
+            const larger = neighbors_i.size <= neighbors_j.size ? neighbors_j : neighbors_i;
+            for (const nb of smaller) {
+              if (larger.has(nb)) {
+                connected = true;
+                break;
+              }
+            }
+          }
+
+          if (connected) {
+            union(i, j);
+          }
+        }
+      }
+
+      // Count connected components
+      const components = new Set();
+      for (let i = 0; i < n; i++) {
+        components.add(find(i));
+      }
+
+      // Unmerged = extra components beyond the first
+      // (first component = the "merged" group, extras = truly unmerged)
+      if (components.size > 1) {
+        unmergedCount += components.size - 1;
       }
     }
 
-    console.log(`[未合并点-采集] 顶点数=${positions.length}, 唯一位置=${positionMap.size}, 未合并点对=${pairCount}`);
-    return pairCount;
+    console.log(`[未合并点-采集] 顶点数=${positions.length}, 唯一位置=${positionMap.size}, 真正未合并=${unmergedCount}`);
+    return unmergedCount;
+  }
+
+  /** Add bidirectional neighbor relationship between two vertex indices */
+  _addNeighbor(map, a, b) {
+    if (!map.has(a)) map.set(a, new Set());
+    if (!map.has(b)) map.set(b, new Set());
+    map.get(a).add(b);
+    map.get(b).add(a);
+  }
+
+  /** Rasterize a UV triangle onto a grid for occupancy calculation */
+  _rasterizeUVTriangle(grid, gridSize, ua, ub, uc) {
+    // Convert UV coordinates to grid coordinates
+    const ax = ua.u * gridSize, ay = ua.v * gridSize;
+    const bx = ub.u * gridSize, by = ub.v * gridSize;
+    const cx = uc.u * gridSize, cy = uc.v * gridSize;
+
+    // Bounding box
+    const minX = Math.max(0, Math.floor(Math.min(ax, bx, cx)));
+    const maxX = Math.min(gridSize - 1, Math.ceil(Math.max(ax, bx, cx)));
+    const minY = Math.max(0, Math.floor(Math.min(ay, by, cy)));
+    const maxY = Math.min(gridSize - 1, Math.ceil(Math.max(ay, by, cy)));
+
+    // For each cell in bounding box, check if inside triangle
+    for (let gy = minY; gy <= maxY; gy++) {
+      for (let gx = minX; gx <= maxX; gx++) {
+        const px = gx + 0.5, py = gy + 0.5;
+        if (this._pointInTriangle(px, py, ax, ay, bx, by, cx, cy)) {
+          grid[gy * gridSize + gx] = 1;
+        }
+      }
+    }
+  }
+
+  /** Check if point (px, py) is inside triangle (ax,ay)-(bx,by)-(cx,cy) */
+  _pointInTriangle(px, py, ax, ay, bx, by, cx, cy) {
+    const d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by);
+    const d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy);
+    const d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay);
+    const hasNeg = (d1 < 0) || (d2 < 0) || (d3 < 0);
+    const hasPos = (d1 > 0) || (d2 > 0) || (d3 > 0);
+    return !(hasNeg && hasPos);
   }
 
   _findHiddenFaces(faceNormals) {
@@ -754,6 +984,10 @@ class ModelViewer {
     this._resizeObserver.disconnect();
     this.renderer.dispose();
     if (this.container) this.container.innerHTML = '';
+  }
+
+  get isLoading() {
+    return this._isLoading;
   }
 
   getGeometryData() {
