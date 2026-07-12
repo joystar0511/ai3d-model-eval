@@ -240,7 +240,7 @@ class GalleryApp {
       // Don't trigger detail when clicking buttons
       if (e.target.classList.contains('gallery-download-btn')) {
         e.stopPropagation();
-        this._downloadModel(m);
+        this._downloadModelZip(m, e.target);
         return;
       }
       if (e.target.classList.contains('gallery-delete-btn')) {
@@ -302,26 +302,90 @@ class GalleryApp {
     });
   }
 
-  // === Download ===
+  // === Download (ZIP) ===
 
-  _downloadModel(model) {
+  async _downloadModelZip(model, btn) {
     const m = model;
     const hasModelFile = !!m.modelFile;
     const texFiles = m.textureFiles || {};
-    const texCount = Object.values(texFiles).filter(f => f && f.data).length;
+    const texEntries = Object.entries(texFiles).filter(([k, f]) => f && f.data);
 
-    if (!hasModelFile && texCount === 0) {
+    if (!hasModelFile && texEntries.length === 0) {
       alert('该模型没有可下载的文件数据');
       return;
     }
 
-    // Download model file
-    if (hasModelFile) {
+    const originalText = btn ? btn.textContent : '';
+    if (btn) { btn.textContent = '⏳'; btn.disabled = true; }
+
+    try {
+      if (typeof JSZip === 'undefined') {
+        this._downloadFilesIndividually(m);
+        return;
+      }
+
+      const zip = new JSZip();
+      const safeName = (m.name || 'model').replace(/[<>:"/\\|?*]/g, '_');
+      const folder = zip.folder(safeName);
+
+      // Add model file
+      if (hasModelFile) {
+        const fileName = m.meta?.fileName || `${safeName}.glb`;
+        const blob = this._dataUrlToBlob(m.modelFile);
+        folder.file(fileName, blob);
+      }
+
+      // Add texture files
+      for (const [key, texFile] of texEntries) {
+        const texName = texFile.name || `${key}.png`;
+        const blob = this._dataUrlToBlob(texFile.data);
+        folder.file(`textures/${texName}`, blob);
+      }
+
+      // Generate zip
+      const zipBlob = await zip.generateAsync({ type: 'blob' });
+
+      // Trigger download
+      const url = URL.createObjectURL(zipBlob);
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${safeName}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      this._showToast(`已打包下载 "${safeName}.zip"`);
+    } catch (e) {
+      console.error('ZIP download failed:', e);
+      this._downloadFilesIndividually(m);
+    } finally {
+      if (btn) { btn.textContent = originalText; btn.disabled = false; }
+    }
+  }
+
+  _dataUrlToBlob(dataUrl) {
+    if (dataUrl instanceof Blob) return dataUrl;
+    if (typeof dataUrl !== 'string') return new Blob([dataUrl]);
+    const parts = dataUrl.split(',');
+    const meta = parts[0];
+    const base64Data = parts[1] || parts[0];
+    const mimeMatch = meta.match(/data:(.*?);base64/);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+    const byteString = atob(base64Data);
+    const bytes = new Uint8Array(byteString.length);
+    for (let i = 0; i < byteString.length; i++) {
+      bytes[i] = byteString.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+  }
+
+  _downloadFilesIndividually(m) {
+    if (m.modelFile) {
       const fileName = m.meta?.fileName || `${m.name || 'model'}.glb`;
       this._triggerDownload(m.modelFile, fileName);
     }
-
-    // Download texture files with slight delay to avoid browser blocking
+    const texFiles = m.textureFiles || {};
     let delay = 300;
     for (const [key, texFile] of Object.entries(texFiles)) {
       if (texFile && texFile.data) {
