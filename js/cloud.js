@@ -1,14 +1,10 @@
 /**
  * CloudStorage - Model sharing & library backend
  *
- * Default implementation uses localStorage for demo purposes.
- * To enable real cross-user sharing, configure a backend endpoint:
- *   window.CLOUD_API_URL = 'https://your-api.com/models'
+ * Primary backend: Firebase Realtime Database (REST API)
+ * Cache/fallback:  localStorage
  *
- * Supported backends:
- *   - localStorage (default, single-user demo)
- *   - REST API (set CLOUD_API_URL)
- *   - Firebase (see README for setup instructions)
+ * To configure Firebase, edit js/firebase-config.js
  */
 
 const STORAGE_KEY = 'ai3d_model_library';
@@ -17,8 +13,22 @@ const SHARED_KEY = 'ai3d_shared_models';
 class CloudStorage {
 
   /**
+   * Get the Firebase DB URL from config
+   */
+  static _getDbUrl() {
+    return (typeof window !== 'undefined' && window.FIREBASE_DB_URL) ? window.FIREBASE_DB_URL : '';
+  }
+
+  /**
+   * Check if Firebase is configured
+   */
+  static isFirebaseConfigured() {
+    return !!this._getDbUrl();
+  }
+
+  /**
    * Share a model to the cloud library
-   * @param {Object} modelData - { name, scores, notes, thumbnail, meta }
+   * @param {Object} modelData - { name, scores, notes, thumbnail, meta, modelFile, textureFiles }
    * @returns {Promise<Object>} shared model record
    */
   static async shareModel(modelData) {
@@ -45,60 +55,104 @@ class CloudStorage {
       sharedBy: this._getUserTag(),
     };
 
-    // Try cloud API if configured
-    if (window.CLOUD_API_URL) {
-      try {
-        const resp = await fetch(window.CLOUD_API_URL, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(record),
-        });
-        if (resp.ok) {
-          const saved = await resp.json();
-          return saved;
-        }
-      } catch (e) {
-        console.warn('Cloud API failed, falling back to local storage:', e);
-      }
-    }
-
-    // Fallback: localStorage
+    // Save to localStorage first (immediate local availability)
     const shared = this._getSharedList();
     shared.unshift(record);
-    // Keep max 200 records
     if (shared.length > 200) shared.length = 200;
     this._saveSharedList(shared);
+
+    // Try Firebase
+    const dbUrl = this._getDbUrl();
+    if (dbUrl) {
+      try {
+        // Calculate total payload size
+        const payloadStr = JSON.stringify(record);
+        const sizeMB = new Blob([payloadStr]).size / 1024 / 1024;
+
+        if (sizeMB > 8) {
+          // Payload too large — strip file data, keep metadata + thumbnail
+          const liteRecord = { ...record, modelFile: null, textureFiles: {} };
+          const resp = await fetch(`${dbUrl}/models/${record.id}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(liteRecord),
+          });
+          if (resp.ok) {
+            console.log('[Firebase] Model shared (metadata only, file data too large)');
+            return record;
+          }
+        } else {
+          const resp = await fetch(`${dbUrl}/models/${record.id}.json`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: payloadStr,
+          });
+          if (resp.ok) {
+            console.log('[Firebase] Model shared successfully');
+            return record;
+          }
+        }
+      } catch (e) {
+        console.warn('[Firebase] Share failed, model saved locally only:', e);
+      }
+    }
 
     return record;
   }
 
   /**
-   * Get all shared models from the library
+   * Get all shared models from Firebase (async)
    * @returns {Promise<Array>} list of shared models
    */
-  static async getLibrary() {
-    // Try cloud API if configured
-    if (window.CLOUD_API_URL) {
-      try {
-        const resp = await fetch(window.CLOUD_API_URL);
-        if (resp.ok) {
-          return await resp.json();
-        }
-      } catch (e) {
-        console.warn('Cloud API failed, falling back to local storage:', e);
-      }
+  static async getLibraryAsync() {
+    const dbUrl = this._getDbUrl();
+    if (!dbUrl) {
+      return this._getSharedList();
     }
 
-    // Fallback: localStorage
+    try {
+      const resp = await fetch(`${dbUrl}/models.json?orderBy="sharedAt"&limitToLast=200`);
+      if (resp.ok) {
+        const data = await resp.json();
+        if (!data) return [];
+
+        // Firebase returns an object keyed by model ID
+        let models = Object.values(data);
+
+        // Sort by sharedAt descending (newest first)
+        models.sort((a, b) => {
+          const aTime = new Date(a.sharedAt || 0).getTime();
+          const bTime = new Date(b.sharedAt || 0).getTime();
+          return bTime - aTime;
+        });
+
+        // Update localStorage cache
+        this._saveSharedList(models);
+
+        return models;
+      }
+    } catch (e) {
+      console.warn('[Firebase] Fetch failed, using local cache:', e);
+    }
+
     return this._getSharedList();
   }
 
   /**
-   * Get all shared models from the library (synchronous for inline display)
+   * Get all shared models (synchronous, from localStorage cache)
+   * Call getLibraryAsync() to refresh from Firebase
    * @returns {Array} list of shared models
    */
   static getAllModels() {
     return this._getSharedList();
+  }
+
+  /**
+   * Get all shared models from the library (legacy async method)
+   * @returns {Promise<Array>}
+   */
+  static async getLibrary() {
+    return this.getLibraryAsync();
   }
 
   /**
@@ -107,15 +161,19 @@ class CloudStorage {
    * @returns {Promise<boolean>}
    */
   static async deleteModel(id) {
-    if (window.CLOUD_API_URL) {
+    const dbUrl = this._getDbUrl();
+    if (dbUrl) {
       try {
-        const resp = await fetch(`${window.CLOUD_API_URL}/${id}`, { method: 'DELETE' });
-        return resp.ok;
+        const resp = await fetch(`${dbUrl}/models/${id}.json`, { method: 'DELETE' });
+        if (!resp.ok) {
+          console.warn('[Firebase] Delete failed');
+        }
       } catch (e) {
-        console.warn('Cloud API delete failed:', e);
+        console.warn('[Firebase] Delete failed:', e);
       }
     }
 
+    // Also remove from localStorage
     const shared = this._getSharedList();
     const filtered = shared.filter(m => m.id !== id);
     this._saveSharedList(filtered);
