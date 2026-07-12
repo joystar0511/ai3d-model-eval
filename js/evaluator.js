@@ -7,7 +7,7 @@
  * 3. 重合点 (Unmerged Vertices) - 10 (no deduction, recommendation tag only)
  * 4. 布线均匀度 (Wire Uniformity) - 10
  * 5. 可绑定程度 (Rig-ability) - 10
- * 6. UV利用度 (UV Utilization) - 10
+ * 6. UV合理性 (UV Rationality) - 10 (occupancy ratio + shell count)
  * 7. 贴图细节与复杂性 (Texture Detail) - 10 (HSV bin analysis)
  * 8. 贴图色彩 (Texture Color) - 10 (brightness < 2 or > 253)
  * 9. 一致性与伪影 (Consistency & Artifacts) - 10 (model-space UV symmetry)
@@ -42,7 +42,7 @@ const DIMENSIONS = [
   { key: 'overlappingVerts',   name: '重合点',           max: 10 },
   { key: 'wireUniformity',     name: '布线均匀度',       max: 10 },
   { key: 'riggability',        name: '可绑定程度',       max: 10 },
-  { key: 'uvUtilization',      name: 'UV利用度',         max: 10 },
+  { key: 'uvUtilization',      name: 'UV合理性',         max: 10 },
   { key: 'textureDetail',      name: '贴图细节与复杂性',  max: 10 },
   { key: 'textureColor',       name: '贴图色彩',         max: 10 },
   { key: 'consistency',        name: '一致性与伪影',     max: 10 },
@@ -129,7 +129,7 @@ class ModelEvaluator {
       case 'overlappingVerts': return this._evalOverlappingVerts(geo);
       case 'wireUniformity': return this._evalWireUniformity(geo);
       case 'riggability': return this._evalRiggability(geo, isCharacterModel, ringLineData);
-      case 'uvUtilization': return this._evalUVUtilization(geo);
+      case 'uvUtilization': return this._evalUVRationality(geo);
       case 'textureDetail': return this._evalTextureDetail(tex);
       case 'textureColor': return this._evalTextureColor(tex);
       case 'consistency': return this._evalConsistency(geo, tex);
@@ -250,74 +250,52 @@ class ModelEvaluator {
   }
 
   /**
-   * UV利用度 (UV Utilization)
+   * UV合理性 (UV Rationality)
    *
-   * Uses actual UV data from the model:
-   * - Divide UV space [0,1]x[0,1] into a 32x32 grid
-   * - Count occupied cells (cells with at least one UV point)
-   * - Utilization ratio = occupied / total
-   * - Also checks for UVs outside [0,1] range (indicates poor layout)
-   * - Score based on utilization ratio: >80% = full, <60% = 0
+   * Scoring criteria: UV壳在[0,1]区间内的占比和切分合理性
+   *
+   * Step 1 — UV occupancy ratio (占比):
+   * - >80%: no deduction
+   * - 60%-80%: deduct 1 point per 1% below 80%
+   * - <60%: 0 points for this step
+   *
+   * Step 2 — UV shell count (切分合理性):
+   * - Base: 15 shells
+   * - <15: no deduction
+   * - >15: deduct 0.1 per extra shell
+   *
+   * Score = max(0, 10 - step1_deduction - step2_deduction)
+   *
+   * Uses pre-computed uvOccupancy and uvShellCount from geometryData.
    */
-  static _evalUVUtilization(geo) {
+  static _evalUVRationality(geo) {
     const max = RAW_MAX.uvUtilization;
-    if (!geo.hasUV) return max * 0.3;
+    if (!geo || !geo.hasUV) return max * 0.3;
 
-    const uvs = geo.uvs;
-    if (!uvs || uvs.length === 0) return max * 0.3;
+    const occupancy = geo.uvOccupancy || 0;
+    const shellCount = geo.uvShellCount || 0;
 
-    // 32x32 grid in UV space
-    const gridSize = 32;
-    const grid = new Set();
-    let outOfRangeCount = 0;
-    let validCount = 0;
+    let score = max;
 
-    for (let i = 0; i < uvs.length; i++) {
-      const uv = uvs[i];
-      if (!uv) continue;
-      validCount++;
-
-      const u = uv.u;
-      const v = uv.v;
-
-      // Check if UV is outside [0,1] range
-      if (u < -0.001 || u > 1.001 || v < -0.001 || v > 1.001) {
-        outOfRangeCount++;
-      }
-
-      // Clamp to grid
-      const gu = Math.max(0, Math.min(gridSize - 1, Math.floor(u * gridSize)));
-      const gv = Math.max(0, Math.min(gridSize - 1, Math.floor(v * gridSize)));
-      grid.add(gu * gridSize + gv);
-    }
-
-    if (validCount === 0) return max * 0.3;
-
-    const totalCells = gridSize * gridSize;
-    const occupiedCells = grid.size;
-    const utilizationRatio = occupiedCells / totalCells;
-
-    // Out-of-range UVs indicate poor layout
-    const outOfRangeRatio = outOfRangeCount / validCount;
-
-    // Score: utilization > 80% = full marks
-    // utilization 60-80% = proportional
-    // utilization < 60% = 0
-    let score;
-    if (utilizationRatio > 0.8) {
-      score = max;
-    } else if (utilizationRatio > 0.6) {
-      score = max * ((utilizationRatio - 0.6) / 0.2);
+    // Step 1: UV occupancy ratio
+    if (occupancy > 0.8) {
+      // No deduction
+    } else if (occupancy > 0.6) {
+      // Deduct 1 point per 1% below 80%
+      const deficitPercent = (0.8 - occupancy) * 100;
+      score -= deficitPercent * 1;
     } else {
+      // <60% → 0 points
       score = 0;
     }
 
-    // Penalty for out-of-range UVs (max 30% of score)
-    if (outOfRangeRatio > 0) {
-      const penalty = Math.min(outOfRangeRatio * 0.5, 0.3) * max;
-      score = Math.max(score - penalty, 0);
+    // Step 2: UV shell count (only apply if score > 0 from step 1)
+    if (score > 0 && shellCount > 15) {
+      const extraShells = shellCount - 15;
+      score -= extraShells * 0.1;
     }
 
+    console.log(`[UV合理性] 占比=${(occupancy * 100).toFixed(1)}%, UV壳数=${shellCount}, 得分=${Math.max(score, 0).toFixed(2)}`);
     return Math.max(score, 0);
   }
 
@@ -415,13 +393,16 @@ class ModelEvaluator {
   /**
    * 一致性与伪影 (Consistency & Artifacts)
    *
-   * New logic:
+   * Logic:
    * - Use model-space vertical centerline as symmetry axis
-   * - For each left-side vertex, find mirror vertex on right side
-   * - Sample texture at both UV positions
-   * - Compare H, S, V (all 0-255) differences
+   * - For each left-side vertex, mirror to right side
+   * - If mirrored position has NO matching right-side vertex → non-symmetric part,
+   *   IGNORE (no deduction) per user spec
+   * - If matched, sample texture at both UV positions, compare HSV differences
    * - Diff <= 20: normal (no penalty)
    * - Diff > 20: each point above 20 → -0.1
+   * - If most of the model is non-symmetric (asymmetric by design),
+   *   scale down penalties proportionally
    * - Score = max(0, 10 - total penalty)
    */
   static _evalConsistency(geo, tex) {
@@ -436,41 +417,48 @@ class ModelEvaluator {
     const imgData = tex.imageData.baseColor;
     const { data, width, height } = imgData;
 
-    // Find center X (model is centered at origin, but compute actual center)
+    // Find center X and model width (model is normalized to ~2.5 units)
     let minX = Infinity, maxX = -Infinity;
     for (const p of positions) {
       if (p.x < minX) minX = p.x;
       if (p.x > maxX) maxX = p.x;
     }
     const centerX = (minX + maxX) / 2;
+    const modelWidth = maxX - minX;
 
-    // Build spatial hash of right-side vertices (x > centerX)
-    const cellSize = 0.05;
+    // Use model-relative matching threshold (1.5% of model width)
+    // Tighter than the old fixed 0.1 to avoid false matches
+    const matchThreshold = Math.max(modelWidth * 0.015, 0.01);
+    const centerEpsilon = modelWidth * 0.01; // Small band around centerline
+
+    // Build spatial hash of right-side vertices
+    const cellSize = matchThreshold;
     const grid = new Map();
 
     const leftIndices = [];
     for (let i = 0; i < positions.length; i++) {
       if (!uvs[i]) continue;
-      if (positions[i].x > centerX) {
+      if (positions[i].x > centerX + centerEpsilon) {
         const p = positions[i];
         const key = `${Math.floor(p.x / cellSize)},${Math.floor(p.y / cellSize)},${Math.floor(p.z / cellSize)}`;
         if (!grid.has(key)) grid.set(key, []);
         grid.get(key).push(i);
-      } else if (positions[i].x < centerX) {
+      } else if (positions[i].x < centerX - centerEpsilon) {
         leftIndices.push(i);
       }
     }
 
     if (leftIndices.length === 0 || grid.size === 0) return max * 0.5;
 
-    // Sample up to 50 left-side vertices
-    const maxPairs = 50;
+    // Sample up to 80 left-side vertices
+    const maxPairs = 80;
     const sampleStep = Math.max(1, Math.floor(leftIndices.length / maxPairs));
 
     let totalPenalty = 0;
     let pairCount = 0;
+    let nonSymmetricCount = 0;
 
-    for (let si = 0; si < leftIndices.length && pairCount < maxPairs; si += sampleStep) {
+    for (let si = 0; si < leftIndices.length; si += sampleStep) {
       const leftIdx = leftIndices[si];
       const lp = positions[leftIdx];
 
@@ -508,7 +496,11 @@ class ModelEvaluator {
         }
       }
 
-      if (nearestIdx === -1 || nearestDist > 0.1) continue;
+      // No match within threshold → non-symmetric part, IGNORE (no penalty)
+      if (nearestIdx === -1 || nearestDist > matchThreshold) {
+        nonSymmetricCount++;
+        continue;
+      }
 
       // Get UVs for both vertices
       const leftUV = uvs[leftIdx];
@@ -537,11 +529,24 @@ class ModelEvaluator {
       pairCount++;
     }
 
-    if (pairCount === 0) return max * 0.5;
+    if (pairCount === 0) {
+      // All vertices are non-symmetric → model is asymmetric by design
+      return max;
+    }
 
-    // Average penalty per pair to normalize
+    // Calculate non-symmetric ratio
+    const totalSampled = pairCount + nonSymmetricCount;
+    const nonSymmetricRatio = nonSymmetricCount / totalSampled;
+
+    // If most of the model is non-symmetric, it's asymmetric by design
+    // Scale down penalties proportionally — non-symmetric parts don't
+    // contribute to consistency issues
+    const symmetryFactor = 1 - nonSymmetricRatio;
+
     const avgPenalty = totalPenalty / pairCount;
-    return Math.max(max - avgPenalty, 0);
+    const scaledPenalty = avgPenalty * symmetryFactor;
+
+    return Math.max(max - scaledPenalty, 0);
   }
 
   static _evalMaterialRationality(tex) {
@@ -834,11 +839,11 @@ class ModelEvaluator {
 
     const uvScore = scores.uvUtilization;
     if (uvScore >= 8) {
-      analyses.push({ title: 'UV展开', content: 'UV利用率良好，UV壳在UV空间内分布合理。' });
+      analyses.push({ title: 'UV展开', content: 'UV合理性良好，UV壳在[0,1]空间内占比合理且切分数量适中。' });
     } else if (uvScore >= 5) {
-      analyses.push({ title: 'UV展开', content: 'UV利用率一般，部分UV壳可能存在重叠或浪费空间的情况。' });
+      analyses.push({ title: 'UV展开', content: 'UV合理性一般，UV壳占比或切分数量有待优化。' });
     } else {
-      analyses.push({ title: 'UV展开', content: 'UV利用率较低，建议重新进行UV展开以优化空间利用率。' });
+      analyses.push({ title: 'UV展开', content: 'UV合理性较低，建议优化UV壳在[0,1]空间的占比或减少不必要的UV切分。' });
     }
 
     // Model smoothness analysis
