@@ -1188,7 +1188,7 @@ a:hover { text-decoration: underline; }
   inset: 0;
   background: rgba(0, 0, 0, 0.8);
   backdrop-filter: blur(6px);
-  z-index: 500;
+  z-index: 10001;
   overflow-y: auto;
   padding: 40px 20px;
 }
