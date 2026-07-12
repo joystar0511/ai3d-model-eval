@@ -609,9 +609,14 @@ class App {
         <div class="rec-label">模型用途推荐</div>
         <div class="rec-tags">${recTagsHTML}</div>
       </div>
-      <button class="btn btn-green btn-sm share-btn" data-id="${model.id}">
-        <span>Share to Cloud</span>
-      </button>
+      <div style="display:flex;gap:10px;margin-top:10px;">
+        <button class="btn btn-green btn-sm share-btn" data-id="${model.id}" style="flex:1;">
+          <span>Share to Cloud</span>
+        </button>
+        <button class="btn btn-outline btn-sm view-report-btn" data-id="${model.id}" style="flex:1;">
+          <span>📄 查看完整报告</span>
+        </button>
+      </div>
       <div class="share-status" id="share-status-${model.id}"></div>
     `;
     notesSection.classList.add('visible');
@@ -625,6 +630,13 @@ class App {
     shareBtn.addEventListener('click', async () => {
       await this._shareModel(model, shareBtn);
     });
+
+    const reportBtn = notesSection.querySelector('.view-report-btn');
+    if (reportBtn) {
+      reportBtn.addEventListener('click', () => {
+        this._showFullReport(model);
+      });
+    }
   }
 
   async _shareModel(model, btn) {
@@ -954,6 +966,78 @@ class App {
 
   // === PK Section ===
 
+  /**
+   * Generate SVG radar chart for 6-dimension comparison.
+   * Each dimension is 0-10, with rings at 2/4/6/8/10.
+   */
+  _generateRadarChartSVG(dimsA, dimsB, nameA, nameB) {
+    const cx = 200, cy = 200, r = 150;
+    const n = dimsA.length; // 6
+    const angleStep = (Math.PI * 2) / n;
+    const startAngle = -Math.PI / 2; // Start from top
+
+    // Helper: convert (dim index, score 0-10) to (x, y)
+    const pointAt = (i, score) => {
+      const angle = startAngle + i * angleStep;
+      const dist = (score / 10) * r;
+      return [cx + Math.cos(angle) * dist, cy + Math.sin(angle) * dist];
+    };
+
+    // Generate grid rings (concentric polygons at 2, 4, 6, 8, 10)
+    let gridRings = '';
+    for (const level of [2, 4, 6, 8, 10]) {
+      const points = [];
+      for (let i = 0; i < n; i++) {
+        const [x, y] = pointAt(i, level);
+        points.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+      }
+      gridRings += `<polygon points="${points.join(' ')}" fill="none" stroke="rgba(255,255,255,0.08)" stroke-width="1"/>`;
+    }
+
+    // Generate axis lines and labels
+    let axes = '';
+    let labels = '';
+    for (let i = 0; i < n; i++) {
+      const [x, y] = pointAt(i, 10);
+      axes += `<line x1="${cx}" y1="${cy}" x2="${x.toFixed(1)}" y2="${y.toFixed(1)}" stroke="rgba(255,255,255,0.1)" stroke-width="1"/>`;
+
+      // Label position (slightly outside the outer ring)
+      const [lx, ly] = pointAt(i, 11.5);
+      const labelName = dimsA[i].name;
+      labels += `<text x="${lx.toFixed(1)}" y="${ly.toFixed(1)}" text-anchor="middle" dominant-baseline="central" fill="#e8eaf0" font-size="13" font-weight="600">${labelName}</text>`;
+
+      // Score label
+      const [sx, sy] = pointAt(i, dimsA[i].score);
+      labels += `<text x="${sx.toFixed(1)}" y="${(sy - 8).toFixed(1)}" text-anchor="middle" fill="#60a5fa" font-size="10" font-weight="600">${dimsA[i].score.toFixed(1)}</text>`;
+      const [sx2, sy2] = pointAt(i, dimsB[i].score);
+      labels += `<text x="${sx2.toFixed(1)}" y="${(sy2 + 12).toFixed(1)}" text-anchor="middle" fill="#f87171" font-size="10" font-weight="600">${dimsB[i].score.toFixed(1)}</text>`;
+    }
+
+    // Generate polygon A (blue)
+    const pointsA = [];
+    for (let i = 0; i < n; i++) {
+      const [x, y] = pointAt(i, dimsA[i].score);
+      pointsA.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+
+    // Generate polygon B (red)
+    const pointsB = [];
+    for (let i = 0; i < n; i++) {
+      const [x, y] = pointAt(i, dimsB[i].score);
+      pointsB.push(`${x.toFixed(1)},${y.toFixed(1)}`);
+    }
+
+    return `
+      <svg viewBox="0 0 400 400" style="width:100%;max-width:400px;margin:0 auto;display:block;">
+        ${gridRings}
+        ${axes}
+        <polygon points="${pointsB.join(' ')}" fill="rgba(239,68,68,0.15)" stroke="#ef4444" stroke-width="2"/>
+        <polygon points="${pointsA.join(' ')}" fill="rgba(59,130,246,0.15)" stroke="#3b82f6" stroke-width="2"/>
+        ${labels}
+      </svg>
+    `;
+  }
+
   _renderPK() {
     const evaluatedModels = this.models.filter(m => m.evaluation);
     if (evaluatedModels.length < 2) return;
@@ -963,20 +1047,14 @@ class App {
     );
     if (!pkData) return;
 
-    let compHTML = '';
-    for (const dim of pkData.dimensionComparison) {
-      compHTML += `
-        <div class="pk-comp-item">
-          <span class="pk-comp-label">${dim.name}</span>
-          <div class="pk-comp-bar">
-            <div class="pk-comp-fill a" style="width:${dim.winnerPct}%"><span class="pk-comp-value">${dim.winner.toFixed(2)}</span></div>
-          </div>
-          <div class="pk-comp-bar">
-            <div class="pk-comp-fill b" style="width:${dim.runnerPct}%"><span class="pk-comp-value">${dim.runner.toFixed(2)}</span></div>
-          </div>
-        </div>
-      `;
-    }
+    // Compute 6 macro dimensions for radar chart
+    const dimsWinner = ModelEvaluator.computeSixDimensions(pkData.winner.result.breakdown);
+    const dimsRunner = ModelEvaluator.computeSixDimensions(pkData.runner.result.breakdown);
+
+    const radarSVG = this._generateRadarChartSVG(
+      dimsWinner, dimsRunner,
+      pkData.winner.name, pkData.runner.name
+    );
 
     const winnerType = pkData.winnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
     const runnerType = pkData.runnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
@@ -997,21 +1075,357 @@ class App {
           <div class="pk-model-score">${pkData.runner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
         </div>
       </div>
-      <div style="margin-top:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;">
-        <div style="display:flex;gap:12px;margin-bottom:16px;align-items:center;">
-          <span style="display:inline-block;width:12px;height:12px;background:var(--blue);border-radius:3px;"></span>
-          <span style="font-size:14px;">${pkData.winner.name}</span>
-          <span style="display:inline-block;width:12px;height:12px;background:var(--red);border-radius:3px;margin-left:20px;"></span>
-          <span style="font-size:14px;">${pkData.runner.name}</span>
+      <div style="margin-top:20px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:24px;">
+        <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;justify-content:center;">
+          <span style="display:flex;align-items:center;gap:8px;">
+            <span style="display:inline-block;width:14px;height:14px;background:#3b82f6;border-radius:3px;"></span>
+            <span style="font-size:14px;font-weight:600;">${pkData.winner.name}</span>
+          </span>
+          <span style="display:flex;align-items:center;gap:8px;">
+            <span style="display:inline-block;width:14px;height:14px;background:#ef4444;border-radius:3px;"></span>
+            <span style="font-size:14px;font-weight:600;">${pkData.runner.name}</span>
+          </span>
         </div>
-        <div class="pk-comparison">${compHTML}</div>
+        <div class="pk-radar-container">${radarSVG}</div>
       </div>
       <div style="margin-top:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;font-size:14px;color:var(--text-dim);line-height:1.8;">
         <strong style="color:var(--text);">对比分析摘要：</strong><br>
         ${pkData.summary}
       </div>
+      <div style="text-align:center;margin-top:16px;">
+        <button class="btn btn-outline btn-sm" id="viewFullPKBtn">
+          <span>📄 查看完整对比报告</span>
+        </button>
+      </div>
     `;
     this.pkSection.classList.add('visible');
+
+    // Bind full PK report button
+    const fullPKBtn = this.pkSection.querySelector('#viewFullPKBtn');
+    if (fullPKBtn) {
+      fullPKBtn.addEventListener('click', () => this._showFullPKReport());
+    }
+  }
+
+  // === Full Report Overlay ===
+
+  _showFullReport(model) {
+    const ev = model.evaluation;
+    if (!ev) return;
+
+    // Remove any existing overlay
+    const existing = document.getElementById('fullReportOverlay');
+    if (existing) existing.remove();
+
+    // Build breakdown HTML
+    let breakdownHTML = '';
+    for (const item of ev.breakdown) {
+      const pct = item.percentage;
+      const color = pct >= 80 ? '#4ade80' : pct >= 60 ? '#fbbf24' : '#f87171';
+      breakdownHTML += `
+        <div class="detail-score-item">
+          <span class="detail-item-name">${item.name}</span>
+          <div class="detail-item-bar-outer">
+            <div class="detail-item-bar-inner" style="width:${pct}%;background:${color};"></div>
+          </div>
+          <span class="detail-item-score" style="color:${color}">${item.score.toFixed(2)}/${item.max}</span>
+        </div>
+      `;
+    }
+
+    // Build analysis HTML
+    let analysisHTML = '';
+    if (ev.analysis) {
+      analysisHTML = ev.analysis.map(a => `
+        <div class="detail-analysis-item">
+          <div class="detail-analysis-title">${a.title}</div>
+          <div class="detail-analysis-content">${a.content}</div>
+        </div>
+      `).join('');
+    }
+
+    // Build usage tags HTML
+    const tags = ModelEvaluator.generateUsageTags(ev.breakdown);
+    let tagsHTML = tags.length > 0
+      ? tags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
+      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
+
+    // Type badge
+    const typeBadge = ev.isCharacterModel
+      ? `<span class="detail-type-badge" style="color:var(--gold);">👤 角色模型 <span class="detail-similarity">相似度 ${ev.similarity.toFixed(2)}%</span></span>`
+      : '';
+
+    const geoData = model.viewer?.getGeometryData();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'fullReportOverlay';
+    overlay.className = 'full-report-overlay visible';
+    overlay.innerHTML = `
+      <div class="full-report-panel">
+        <button class="full-report-close" id="reportCloseBtn">×</button>
+
+        <!-- Share buttons (top-right) -->
+        <div class="share-bar">
+          <span class="share-bar-label">分享到：</span>
+          <button class="share-btn-circle share-weibo" data-platform="weibo" title="分享到微博">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10.7 13.5c-2.4-.6-4.3.7-4.3 2.8 0 2.2 1.9 3.5 4.3 2.9 2.3-.6 3.7-2.1 3.7-3.5 0-1.3-1.4-1.8-3.7-2.2zm-1 4.5c-.8.2-1.6-.2-1.7-.9-.1-.7.5-1.4 1.3-1.6.8-.2 1.6.2 1.7.9.1.7-.5 1.4-1.3 1.6zm1.3-1.8c-.3.1-.6 0-.7-.2-.1-.2.1-.5.4-.6.3-.1.6 0 .7.2.1.2-.1.5-.4.6z"/><path d="M20.5 11.6c-.3-1.4-1.4-2.4-2.7-2.4-.3 0-.6.1-.7.4-.1.3 0 .6.3.7.8.2 1.4.8 1.6 1.6.1.3.4.5.7.4.3-.1.5-.4.4-.7z"/><path d="M23 11c-.5-2.9-2.8-5.1-5.7-5.1-.6 0-1.1.1-1.3.4-.2.3-.1.7.2.8.2.1.5.1.8.1 2 0 3.7 1.5 4 3.6 0 .3.3.6.6.5.3 0 .5-.3.4-.6z"/></svg>
+          </button>
+          <button class="share-btn-circle share-wechat" data-platform="wechat" title="分享到微信">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M8.7 6.5c.5 0 1-.4 1-1s-.4-1-1-1-1 .4-1 1 .4 1 1 1zm4.7 0c.5 0 1-.4 1-1s-.4-1-1-1-1 .4-1 1 .4 1 1 1zm-6.2 6.4c-.6 0-1.1-.4-1.1-1s.5-1 1.1-1 1.1.4 1.1 1-.5 1-1.1 1zm4.7 0c-.6 0-1.1-.4-1.1-1s.5-1 1.1-1 1.1.4 1.1 1-.5 1-1.1 1z"/><path d="M9.1 4C5.2 4 2 6.6 2 9.8c0 1.8 1 3.4 2.6 4.5l-.7 2 2.3-1.2c.8.2 1.6.4 2.4.4h.6c-.1-.4-.2-.9-.2-1.3 0-3 2.8-5.4 6.3-5.4h.6C15.3 5.8 12.5 4 9.1 4zm8.8 4.4c-3.1 0-5.6 2.1-5.6 4.7 0 2.6 2.5 4.7 5.6 4.7.7 0 1.4-.1 2-.3l1.8 1-.5-1.6c1.3-.9 2.3-2.2 2.3-3.8 0-2.6-2.5-4.7-5.6-4.7z"/></svg>
+          </button>
+          <button class="share-btn-circle share-xhs" data-platform="xiaohongshu" title="分享到小红书">
+            <span style="font-size:12px;font-weight:700;">小红书</span>
+          </button>
+          <button class="share-btn-circle share-douyin" data-platform="douyin" title="分享到抖音">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.8c-.6-1.1-1.4-2-2.4-2.6v2.8c.7.5 1.2 1.3 1.4 2.2.2.9 0 1.8-.5 2.6-.5.8-1.3 1.3-2.2 1.5-.9.2-1.8 0-2.6-.5-.8-.5-1.3-1.3-1.5-2.2V20c1.1.3 2.3.3 3.4 0 1.1-.3 2.1-.9 2.9-1.7.8-.8 1.4-1.8 1.7-2.9.3-1.1.3-2.3 0-3.4V5.8z"/><path d="M13.8 5.2c-.6-.4-1.1-.9-1.5-1.5h-2.2v10.5c0 .5-.2 1-.5 1.4-.4.4-.8.6-1.4.6-.5 0-1-.2-1.4-.6-.4-.4-.6-.9-.6-1.4 0-.5.2-1 .6-1.4.4-.4.9-.6 1.4-.6.2 0 .4 0 .6.1V9.7c-.2 0-.4-.1-.6-.1-1.1 0-2.1.4-2.9 1.2-.8.8-1.2 1.8-1.2 2.9s.4 2.1 1.2 2.9c.8.8 1.8 1.2 2.9 1.2s2.1-.4 2.9-1.2c.8-.8 1.2-1.8 1.2-2.9V5.2z"/></svg>
+          </button>
+        </div>
+
+        <div class="full-report-content">
+          <div class="detail-header">
+            <div class="detail-thumbnail">
+              ${model.viewer?.captureThumbnail() ? `<img src="${model.viewer.captureThumbnail()}" />` : '<span class="lib-placeholder">🧊</span>'}
+            </div>
+            <div class="detail-title-area">
+              <h2 class="detail-model-name">${model.name}</h2>
+              ${typeBadge}
+              <div class="detail-total-score">
+                <span class="detail-score-value">${ev.totalScore.toFixed(2)}</span>
+                <span class="detail-score-max">/ ${ev.maxScore}</span>
+                <span class="score-grade ${ev.gradeClass}">${ev.grade}</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="detail-rec-tags">
+            <div class="rec-label">模型用途推荐</div>
+            <div class="rec-tags">${tagsHTML}</div>
+          </div>
+
+          <div class="detail-breakdown">
+            <h3>详细评分</h3>
+            ${breakdownHTML}
+          </div>
+
+          <div class="detail-analysis-section">
+            <h3 style="font-size:16px;font-weight:700;margin-bottom:12px;color:var(--text);">分析报告</h3>
+            ${analysisHTML}
+          </div>
+
+          <div class="detail-meta-section">
+            <h3>模型信息</h3>
+            <div class="detail-meta-list">
+              <span class="detail-meta-item">顶点: ${(geoData?.totalVertices || 0).toLocaleString()}</span>
+              <span class="detail-meta-item">面: ${(geoData?.totalFaces || 0).toLocaleString()}</span>
+              <span class="detail-meta-item">UV: ${geoData?.hasUV ? '有' : '无'}</span>
+              <span class="detail-meta-item">UV壳数: ${geoData?.uvShellCount || 0}</span>
+              <span class="detail-meta-item">UV占用: ${((geoData?.uvOccupancy || 0) * 100).toFixed(1)}%</span>
+              <span class="detail-meta-item">空洞: ${geoData?.holeCount || 0}</span>
+              <span class="detail-meta-item">平滑比值: ${(geoData?.smoothRatio || 0).toFixed(3)}</span>
+            </div>
+          </div>
+
+          ${model.notes ? `
+          <div class="detail-notes-section">
+            <h3>备注</h3>
+            <div class="detail-notes-text">${model.notes}</div>
+          </div>
+          ` : ''}
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    // Bind close button
+    overlay.querySelector('#reportCloseBtn').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+
+    // Bind share buttons
+    overlay.querySelectorAll('.share-btn-circle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._shareToPlatform(btn.dataset.platform, model.name, ev.totalScore);
+      });
+    });
+  }
+
+  _showFullPKReport() {
+    const evaluatedModels = this.models.filter(m => m.evaluation);
+    if (evaluatedModels.length < 2) return;
+
+    const pkData = ModelEvaluator.compareModels(
+      evaluatedModels.map(m => ({ name: m.name, result: m.evaluation }))
+    );
+    if (!pkData) return;
+
+    const dimsWinner = ModelEvaluator.computeSixDimensions(pkData.winner.result.breakdown);
+    const dimsRunner = ModelEvaluator.computeSixDimensions(pkData.runner.result.breakdown);
+    const radarSVG = this._generateRadarChartSVG(dimsWinner, dimsRunner, pkData.winner.name, pkData.runner.name);
+
+    // Remove any existing overlay
+    const existing = document.getElementById('fullReportOverlay');
+    if (existing) existing.remove();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'fullReportOverlay';
+    overlay.className = 'full-report-overlay visible';
+    overlay.innerHTML = `
+      <div class="full-report-panel" style="max-width:900px;">
+        <button class="full-report-close" id="reportCloseBtn">×</button>
+
+        <div class="share-bar">
+          <span class="share-bar-label">分享到：</span>
+          <button class="share-btn-circle share-weibo" data-platform="weibo" title="分享到微博">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M10.7 13.5c-2.4-.6-4.3.7-4.3 2.8 0 2.2 1.9 3.5 4.3 2.9 2.3-.6 3.7-2.1 3.7-3.5 0-1.3-1.4-1.8-3.7-2.2z"/></svg>
+          </button>
+          <button class="share-btn-circle share-wechat" data-platform="wechat" title="分享到微信">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M9.1 4C5.2 4 2 6.6 2 9.8c0 1.8 1 3.4 2.6 4.5l-.7 2 2.3-1.2c.8.2 1.6.4 2.4.4z"/></svg>
+          </button>
+          <button class="share-btn-circle share-xhs" data-platform="xiaohongshu" title="分享到小红书">
+            <span style="font-size:12px;font-weight:700;">小红书</span>
+          </button>
+          <button class="share-btn-circle share-douyin" data-platform="douyin" title="分享到抖音">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M16.6 5.8c-.6-1.1-1.4-2-2.4-2.6v2.8c.7.5 1.2 1.3 1.4 2.2z"/></svg>
+          </button>
+        </div>
+
+        <div class="full-report-content">
+          <h2 style="font-size:24px;font-weight:800;margin-bottom:20px;text-align:center;">Model PK - 对比评测报告</h2>
+
+          <div class="pk-container" style="margin-bottom:24px;">
+            <div class="pk-card">
+              ${pkData.winner.result.totalScore > pkData.runner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
+              <div class="pk-model-name">${pkData.winner.name}</div>
+              <div class="pk-model-score">${pkData.winner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
+            </div>
+            <div class="pk-card">
+              ${pkData.runner.result.totalScore > pkData.winner.result.totalScore ? '<div class="pk-winner-badge">优胜者</div>' : ''}
+              <div class="pk-model-name">${pkData.runner.name}</div>
+              <div class="pk-model-score">${pkData.runner.result.totalScore.toFixed(2)}<span style="font-size:18px;color:#8b90a0">/100</span></div>
+            </div>
+          </div>
+
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;margin-bottom:20px;">
+            <div style="display:flex;gap:16px;margin-bottom:16px;align-items:center;justify-content:center;">
+              <span style="display:flex;align-items:center;gap:8px;">
+                <span style="display:inline-block;width:14px;height:14px;background:#3b82f6;border-radius:3px;"></span>
+                <span style="font-size:14px;font-weight:600;">${pkData.winner.name}</span>
+              </span>
+              <span style="display:flex;align-items:center;gap:8px;">
+                <span style="display:inline-block;width:14px;height:14px;background:#ef4444;border-radius:3px;"></span>
+                <span style="font-size:14px;font-weight:600;">${pkData.runner.name}</span>
+              </span>
+            </div>
+            <div class="pk-radar-container">${radarSVG}</div>
+          </div>
+
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;font-size:14px;color:var(--text-dim);line-height:1.8;margin-bottom:20px;">
+            <strong style="color:var(--text);">对比分析摘要：</strong><br>
+            ${pkData.summary}
+          </div>
+
+          <!-- Detailed dimension comparison -->
+          <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;">
+            <h3 style="font-size:16px;font-weight:700;margin-bottom:16px;color:var(--text);">六维详细对比</h3>
+            ${dimsWinner.map((d, i) => `
+              <div class="detail-score-item">
+                <span class="detail-item-name">${d.name}</span>
+                <div class="detail-item-bar-outer">
+                  <div class="detail-item-bar-inner" style="width:${(d.score/10)*100}%;background:#3b82f6;"></div>
+                </div>
+                <span class="detail-item-score" style="color:#60a5fa;">${d.score.toFixed(2)}</span>
+              </div>
+              <div class="detail-score-item">
+                <span class="detail-item-name"></span>
+                <div class="detail-item-bar-outer">
+                  <div class="detail-item-bar-inner" style="width:${(dimsRunner[i].score/10)*100}%;background:#ef4444;"></div>
+                </div>
+                <span class="detail-item-score" style="color:#f87171;">${dimsRunner[i].score.toFixed(2)}</span>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      </div>
+    `;
+
+    document.body.appendChild(overlay);
+
+    overlay.querySelector('#reportCloseBtn').addEventListener('click', () => overlay.remove());
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay) overlay.remove();
+    });
+
+    overlay.querySelectorAll('.share-btn-circle').forEach(btn => {
+      btn.addEventListener('click', () => {
+        this._shareToPlatform(btn.dataset.platform, `模型对比报告`, null);
+      });
+    });
+  }
+
+  /**
+   * Share to social platforms.
+   * - Weibo: opens share dialog
+   * - WeChat: shows QR code popup
+   * - Xiaohongshu: copies link + opens website
+   * - Douyin: copies link + opens website
+   */
+  _shareToPlatform(platform, modelName, score) {
+    const shareUrl = window.location.href.split('?')[0]; // Base URL without params
+    const title = score !== null
+      ? `我用AI 3D评测工具评测了模型"${modelName}"，得分${score.toFixed(2)}分！`
+      : `AI 3D拓扑低模评测工具 - 模型对比报告`;
+
+    switch (platform) {
+      case 'weibo': {
+        const url = `https://service.weibo.com/share/share.php?url=${encodeURIComponent(shareUrl)}&title=${encodeURIComponent(title)}`;
+        window.open(url, '_blank', 'width=600,height=500');
+        break;
+      }
+      case 'wechat': {
+        // Show QR code popup
+        const qrUrl = `https://api.qrserver.com/v1/create-qr-code/?size=240x240&data=${encodeURIComponent(shareUrl)}`;
+        const popup = document.createElement('div');
+        popup.className = 'qr-popup';
+        popup.innerHTML = `
+          <div class="qr-popup-content">
+            <h4>微信扫一扫分享</h4>
+            <img src="${qrUrl}" alt="QR Code" style="width:240px;height:240px;border-radius:12px;" />
+            <p>打开微信，扫描二维码即可分享</p>
+            <button class="btn btn-outline btn-sm" id="qrCloseBtn">关闭</button>
+          </div>
+        `;
+        popup.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.8);display:flex;align-items:center;justify-content:center;z-index:10002;';
+        document.body.appendChild(popup);
+        popup.querySelector('#qrCloseBtn').addEventListener('click', () => popup.remove());
+        popup.addEventListener('click', (e) => {
+          if (e.target === popup) popup.remove();
+        });
+        break;
+      }
+      case 'xiaohongshu': {
+        // Copy link to clipboard, then open website
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          this._showToast('链接已复制，正在跳转小红书，请粘贴链接分享', 'success');
+          setTimeout(() => window.open('https://www.xiaohongshu.com/', '_blank'), 500);
+        }).catch(() => {
+          this._showToast('请手动复制链接：' + shareUrl, 'warn');
+          window.open('https://www.xiaohongshu.com/', '_blank');
+        });
+        break;
+      }
+      case 'douyin': {
+        navigator.clipboard.writeText(shareUrl).then(() => {
+          this._showToast('链接已复制，正在跳转抖音，请粘贴链接分享', 'success');
+          setTimeout(() => window.open('https://www.douyin.com/', '_blank'), 500);
+        }).catch(() => {
+          this._showToast('请手动复制链接：' + shareUrl, 'warn');
+          window.open('https://www.douyin.com/', '_blank');
+        });
+        break;
+      }
+    }
   }
 
   // === Utility ===
