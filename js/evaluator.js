@@ -1139,37 +1139,57 @@ class ModelEvaluator {
     const checkOthers = (excludeKeys, threshold) => {
       for (const key of allKeys) {
         if (!excludeKeys.includes(key)) {
-          if (!(scores[key] > threshold)) return false;
+          if (!(scores[key] > threshold)) {
+            console.log(`  [checkOthers] FAIL: ${key}=${scores[key]} (need >${threshold})`);
+            return false;
+          }
         }
       }
       return true;
     };
 
+    // Debug: log all scores
+    console.log('[generateUsageTags] scores:', JSON.stringify(scores));
+    console.log('[generateUsageTags] faceCount:', faceCount);
+
     const tags = [];
 
     // 次世代游戏: 材质合理性>6, 模型光滑度>7, 法线贴图质量>8, 其他项>3 (忽略UV合理性)
-    if (scores.materialRationality > 6 &&
+    const condNextGen = scores.materialRationality > 6 &&
         scores.modelSmoothness > 7 &&
         scores.normalMapQuality > 8 &&
-        checkOthers(['materialRationality', 'modelSmoothness', 'normalMapQuality', 'uvUtilization'], 3)) {
+        checkOthers(['materialRationality', 'modelSmoothness', 'normalMapQuality', 'uvUtilization'], 3);
+    console.log('[generateUsageTags] 次世代游戏:', condNextGen,
+      'materialRationality=', scores.materialRationality,
+      'modelSmoothness=', scores.modelSmoothness,
+      'normalMapQuality=', scores.normalMapQuality);
+    if (condNextGen) {
       tags.push({ label: '次世代游戏', color: 'blue', description: '可以用作次世代游戏模型，直接导入unity或虚幻等引擎作为游戏资产' });
     }
 
     // 手绘游戏: 贴图细节与复杂性>8, 其他项>3 (忽略UV合理性)
-    if (scores.textureDetail > 8 &&
-        checkOthers(['textureDetail', 'uvUtilization'], 3)) {
+    const condHandPaint = scores.textureDetail > 8 &&
+        checkOthers(['textureDetail', 'uvUtilization'], 3);
+    console.log('[generateUsageTags] 手绘游戏:', condHandPaint, 'textureDetail=', scores.textureDetail);
+    if (condHandPaint) {
       tags.push({ label: '手绘游戏', color: 'green', description: '可以用作手绘游戏资产，常见于风格化手绘游戏或小游戏' });
     }
 
-    // 3D打印: 模型光滑度>7, 破面=10, 其他项>3 (忽略UV合理性)
-    if (scores.modelSmoothness > 7 &&
-        scores.brokenFaces === 10 &&
-        checkOthers(['modelSmoothness', 'brokenFaces', 'uvUtilization'], 3)) {
+    // 3D打印: 模型光滑度>7, 破面>=10, 其他项>3 (忽略UV合理性)
+    const cond3DPrint = scores.modelSmoothness > 7 &&
+        scores.brokenFaces >= 10 &&
+        checkOthers(['modelSmoothness', 'brokenFaces', 'uvUtilization'], 3);
+    console.log('[generateUsageTags] 3D打印:', cond3DPrint,
+      'modelSmoothness=', scores.modelSmoothness,
+      'brokenFaces=', scores.brokenFaces);
+    if (cond3DPrint) {
       tags.push({ label: '3D打印', color: 'purple', description: '拆件后可作为3D打印模型，制作成实体手办' });
     }
 
     // 影视动画: 其他项>9 (忽略UV合理性)
-    if (checkOthers(['uvUtilization'], 9)) {
+    const condFilm = checkOthers(['uvUtilization'], 9);
+    console.log('[generateUsageTags] 影视动画:', condFilm);
+    if (condFilm) {
       tags.push({ label: '影视动画', color: 'gold', description: '精度较高，可作为影视模型制作动画或短剧' });
     }
 
@@ -1183,6 +1203,7 @@ class ModelEvaluator {
       tags.push({ label: '简模', color: 'teal', description: '这是一个低模' });
     }
 
+    console.log('[generateUsageTags] final tags:', tags.map(t => t.label));
     return tags;
   }
 }
