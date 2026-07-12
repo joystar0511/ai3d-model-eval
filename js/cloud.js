@@ -221,7 +221,7 @@ class CloudStorage {
       const resp = await fetch(`${dbUrl}/models.json`);
       if (resp.ok) {
         const data = await resp.json();
-        if (!data) return [];
+        if (!data) return this._getSharedList();
 
         let models = Object.values(data);
 
