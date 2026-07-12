@@ -6,7 +6,7 @@
  * - Texture files: BaseColor, NormalMap, MetallicMap, Roughness, Emission
  *
  * Standard human body model: ADMIN ONLY (URL ?admin=1)
- * Global display mode toolbar: applies to all user models simultaneously
+ * Per-model display mode: each model card has its own mode buttons (gray/wireframe/color/material)
  * Model Library: displayed at bottom 1/3 of page
  */
 
@@ -26,7 +26,6 @@ class App {
   constructor() {
     this.models = [];
     this.isEvaluating = false;
-    this.globalMode = 'gray'; // Current global display mode
 
     // Standard human body model reference (admin only)
     this.standardModel = {
@@ -79,10 +78,6 @@ class App {
     this.progressText = document.getElementById('progressText');
     this.toast = document.getElementById('toast');
 
-    // Global mode toolbar
-    this.globalModeToolbar = document.getElementById('globalModeToolbar');
-    this.globalModeBtns = document.querySelectorAll('.global-mode-btn');
-
     // Library elements
     this.libraryGrid = document.getElementById('libraryGrid');
     this.libraryRefreshBtn = document.getElementById('libraryRefreshBtn');
@@ -126,53 +121,36 @@ class App {
     this.btnEvaluate.addEventListener('click', () => this._startEvaluation());
     this.fileInputAdd.addEventListener('change', e => this._handleFiles(e.target.files));
 
-    // Global display mode toolbar
-    this.globalModeBtns.forEach(btn => {
-      btn.addEventListener('click', () => {
-        const mode = btn.dataset.mode;
-        this._setGlobalMode(mode);
-      });
-    });
-
     // Library refresh
     this.libraryRefreshBtn.addEventListener('click', () => this._refreshLibrary());
   }
 
-  // === Global Display Mode ===
+  // === Per-Model Display Mode ===
 
-  /** Set display mode for ALL user models simultaneously */
-  _setGlobalMode(mode) {
-    this.globalMode = mode;
+  /** Set display mode for a single model */
+  _setModelMode(modelId, mode) {
+    const model = this.models.find(m => m.id === modelId);
+    if (!model || !model.viewer) return;
 
-    // Update global toolbar button states
-    this.globalModeBtns.forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
+    model.mode = mode;
 
-    // Update all per-card mode buttons
-    document.querySelectorAll('.card-mode-btn').forEach(btn => {
-      btn.classList.toggle('active', btn.dataset.mode === mode);
-    });
+    // Update this card's mode buttons only
+    const card = document.getElementById(`card-${modelId}`);
+    if (card) {
+      card.querySelectorAll('.card-mode-btn').forEach(btn => {
+        btn.classList.toggle('active', btn.dataset.mode === mode);
+      });
+    }
 
     // Check for UV presence when switching to texture modes
     if (mode === 'color' || mode === 'material') {
-      let noUVCount = 0;
-      for (const model of this.models) {
-        if (model.viewer && !model.viewer.hasUV()) {
-          noUVCount++;
-        }
-      }
-      if (noUVCount > 0) {
-        this._showToast(`⚠ ${noUVCount} 个模型无UV坐标，贴图可能显示异常`, 'warn');
+      if (!model.viewer.hasUV()) {
+        this._showToast(`⚠ 模型 "${model.name}" 无UV坐标，贴图可能显示异常`, 'warn');
       }
     }
 
-    // Apply to all user models
-    for (const model of this.models) {
-      if (model.viewer) {
-        model.viewer.setMode(mode);
-      }
-    }
+    // Apply to this model only
+    model.viewer.setMode(mode);
   }
 
   // === Standard Human Model Handling (Admin Only) ===
@@ -294,6 +272,7 @@ class App {
       viewer: null,
       evaluation: null,
       notes: '',
+      mode: 'gray', // Per-model display mode
       shared: false,
       textureFiles: {
         baseColor: null,
@@ -318,18 +297,18 @@ class App {
       </div>
       <div class="viewer-container" id="viewer-${model.id}"></div>
 
-      <!-- Per-card viewer mode buttons (controls global mode) -->
+      <!-- Per-card viewer mode buttons (controls this model only) -->
       <div class="card-viewer-modes">
-        <button class="card-mode-btn ${this.globalMode === 'gray' ? 'active' : ''}" data-mode="gray" title="无贴图，灰色材质显示模型形状">
+        <button class="card-mode-btn ${model.mode === 'gray' ? 'active' : ''}" data-mode="gray" title="无贴图，灰色材质显示模型形状">
           <span>🔘</span> 灰模显示
         </button>
-        <button class="card-mode-btn ${this.globalMode === 'wireframe' ? 'active' : ''}" data-mode="wireframe" title="蓝色线框，查看拓扑布线结构">
+        <button class="card-mode-btn ${model.mode === 'wireframe' ? 'active' : ''}" data-mode="wireframe" title="蓝色线框，查看拓扑布线结构">
           <span>🔷</span> 线框显示
         </button>
-        <button class="card-mode-btn ${this.globalMode === 'color' ? 'active' : ''}" data-mode="color" title="贴上颜色贴图(BaseColor)的效果">
+        <button class="card-mode-btn ${model.mode === 'color' ? 'active' : ''}" data-mode="color" title="贴上颜色贴图(BaseColor)的效果">
           <span>🎨</span> 颜色贴图
         </button>
-        <button class="card-mode-btn ${this.globalMode === 'material' ? 'active' : ''}" data-mode="material" title="平行光 + PBR全贴图材质效果">
+        <button class="card-mode-btn ${model.mode === 'material' ? 'active' : ''}" data-mode="material" title="平行光 + PBR全贴图材质效果">
           <span>💡</span> 材质效果
         </button>
       </div>
@@ -364,8 +343,8 @@ class App {
     const viewerContainer = card.querySelector(`#viewer-${model.id}`);
     model.viewer = new ModelViewer(viewerContainer, model.file);
 
-    // Apply current global mode to new model
-    model.viewer.setMode(this.globalMode);
+    // Apply this model's own mode
+    model.viewer.setMode(model.mode);
 
     const nameInput = card.querySelector('.model-name-input');
     nameInput.addEventListener('input', e => {
@@ -393,10 +372,10 @@ class App {
       this._removeModel(model.id);
     });
 
-    // Per-card mode buttons (control global mode)
+    // Per-card mode buttons (control this model only)
     card.querySelectorAll('.card-mode-btn').forEach(btn => {
       btn.addEventListener('click', () => {
-        this._setGlobalMode(btn.dataset.mode);
+        this._setModelMode(model.id, btn.dataset.mode);
       });
     });
   }
@@ -420,7 +399,7 @@ class App {
     await model.viewer.setTextures(model.textureFiles);
 
     // If user uploaded a color map and current mode is 'color', refresh display
-    if (textureKey === 'baseColor' && this.globalMode === 'color') {
+    if (textureKey === 'baseColor' && model.mode === 'color') {
       model.viewer.setMode('color');
     }
 
@@ -455,12 +434,10 @@ class App {
       this.initialUpload.style.display = 'none';
       this.splitButtons.style.display = 'flex';
       this.modelGrid.style.display = 'grid';
-      this.globalModeToolbar.classList.add('visible');
     } else {
       this.initialUpload.style.display = 'block';
       this.splitButtons.style.display = 'none';
       this.modelGrid.style.display = 'none';
-      this.globalModeToolbar.classList.remove('visible');
     }
   }
 
@@ -589,7 +566,10 @@ class App {
     let recTagsHTML = '';
     const ev = model.evaluation;
     if (ev) {
-      const tags = ModelEvaluator.generateUsageTags(ev.breakdown);
+      const tags = ModelEvaluator.generateUsageTags(ev.breakdown, {
+        faces: model.viewer?.getGeometryData()?.totalFaces || 0,
+        vertices: model.viewer?.getGeometryData()?.totalVertices || 0,
+      });
 
       recTagsHTML = tags.map(t => `
         <span class="rec-tag rec-tag-${t.color}">
@@ -604,7 +584,7 @@ class App {
     }
 
     notesSection.innerHTML = `
-      <textarea placeholder="输入备注..." data-id="${model.id}">${model.notes}</textarea>
+      <textarea placeholder="输入评论..." data-id="${model.id}">${model.notes}</textarea>
       <div class="recommendation-section">
         <div class="rec-label">模型用途推荐</div>
         <div class="rec-tags">${recTagsHTML}</div>
@@ -1043,7 +1023,14 @@ class App {
     if (evaluatedModels.length < 2) return;
 
     const pkData = ModelEvaluator.compareModels(
-      evaluatedModels.map(m => ({ name: m.name, result: m.evaluation }))
+      evaluatedModels.map(m => ({
+        name: m.name,
+        result: m.evaluation,
+        meta: {
+          faces: m.viewer?.getGeometryData()?.totalFaces || 0,
+          vertices: m.viewer?.getGeometryData()?.totalVertices || 0,
+        },
+      }))
     );
     if (!pkData) return;
 
@@ -1058,6 +1045,32 @@ class App {
 
     const winnerType = pkData.winnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
     const runnerType = pkData.runnerIsChar ? '<span style="color:var(--gold);font-size:12px;">👤 角色模型</span>' : '';
+
+    // Generate usage tags for both models (with descriptions)
+    const winnerTags = ModelEvaluator.generateUsageTags(pkData.winner.result.breakdown, pkData.winner.meta);
+    const runnerTags = ModelEvaluator.generateUsageTags(pkData.runner.result.breakdown, pkData.runner.meta);
+
+    // Build per-model summary paragraphs
+    const winnerTagsHTML = winnerTags.length > 0
+      ? winnerTags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
+      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
+    const runnerTagsHTML = runnerTags.length > 0
+      ? runnerTags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
+      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
+
+    const winnerDescHTML = winnerTags.length > 0
+      ? winnerTags.map(t => `<p class="pk-summary-desc">${t.description}</p>`).join('')
+      : '';
+    const runnerDescHTML = runnerTags.length > 0
+      ? runnerTags.map(t => `<p class="pk-summary-desc">${t.description}</p>`).join('')
+      : '';
+
+    const winnerStrengths = pkData.winnerStrengths.length > 0
+      ? `<div class="pk-summary-strengths"><span class="pk-strength-label">优势项：</span>${pkData.winnerStrengths.join('、')}</div>`
+      : '';
+    const runnerStrengths = pkData.runnerStrengths.length > 0
+      ? `<div class="pk-summary-strengths"><span class="pk-strength-label">优势项：</span>${pkData.runnerStrengths.join('、')}</div>`
+      : '';
 
     this.pkSection.innerHTML = `
       <h2>Model PK - 对比评测</h2>
@@ -1088,9 +1101,28 @@ class App {
         </div>
         <div class="pk-radar-container">${radarSVG}</div>
       </div>
-      <div style="margin-top:16px;background:var(--bg-card);border:1px solid var(--border);border-radius:12px;padding:20px;font-size:14px;color:var(--text-dim);line-height:1.8;">
-        <strong style="color:var(--text);">对比分析摘要：</strong><br>
-        ${pkData.summary}
+      <div class="pk-summary-section">
+        <h3 class="pk-summary-title">📋 对比分析摘要</h3>
+        <div class="pk-summary-divider"></div>
+        <div class="pk-summary-model">
+          <div class="pk-summary-model-header">
+            <span class="pk-summary-model-name" style="color:#3b82f6;">${pkData.winner.name}</span>
+            <span class="pk-summary-model-score">${pkData.winner.result.totalScore.toFixed(2)} / 100</span>
+          </div>
+          <div class="pk-summary-tags">${winnerTagsHTML}</div>
+          ${winnerDescHTML}
+          ${winnerStrengths}
+        </div>
+        <div class="pk-summary-divider"></div>
+        <div class="pk-summary-model">
+          <div class="pk-summary-model-header">
+            <span class="pk-summary-model-name" style="color:#ef4444;">${pkData.runner.name}</span>
+            <span class="pk-summary-model-score">${pkData.runner.result.totalScore.toFixed(2)} / 100</span>
+          </div>
+          <div class="pk-summary-tags">${runnerTagsHTML}</div>
+          ${runnerDescHTML}
+          ${runnerStrengths}
+        </div>
       </div>
       <div style="text-align:center;margin-top:16px;">
         <button class="btn btn-outline btn-sm" id="viewFullPKBtn">
@@ -1145,7 +1177,10 @@ class App {
     }
 
     // Build usage tags HTML
-    const tags = ModelEvaluator.generateUsageTags(ev.breakdown);
+    const tags = ModelEvaluator.generateUsageTags(ev.breakdown, {
+      faces: model.viewer?.getGeometryData()?.totalFaces || 0,
+      vertices: model.viewer?.getGeometryData()?.totalVertices || 0,
+    });
     let tagsHTML = tags.length > 0
       ? tags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
       : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
@@ -1227,7 +1262,7 @@ class App {
 
           ${model.notes ? `
           <div class="detail-notes-section">
-            <h3>备注</h3>
+            <h3>评论</h3>
             <div class="detail-notes-text">${model.notes}</div>
           </div>
           ` : ''}
@@ -1256,13 +1291,45 @@ class App {
     if (evaluatedModels.length < 2) return;
 
     const pkData = ModelEvaluator.compareModels(
-      evaluatedModels.map(m => ({ name: m.name, result: m.evaluation }))
+      evaluatedModels.map(m => ({
+        name: m.name,
+        result: m.evaluation,
+        meta: {
+          faces: m.viewer?.getGeometryData()?.totalFaces || 0,
+          vertices: m.viewer?.getGeometryData()?.totalVertices || 0,
+        },
+      }))
     );
     if (!pkData) return;
 
     const dimsWinner = ModelEvaluator.computeSixDimensions(pkData.winner.result.breakdown);
     const dimsRunner = ModelEvaluator.computeSixDimensions(pkData.runner.result.breakdown);
     const radarSVG = this._generateRadarChartSVG(dimsWinner, dimsRunner, pkData.winner.name, pkData.runner.name);
+
+    // Generate usage tags for both models (with descriptions)
+    const winnerTags = ModelEvaluator.generateUsageTags(pkData.winner.result.breakdown, pkData.winner.meta);
+    const runnerTags = ModelEvaluator.generateUsageTags(pkData.runner.result.breakdown, pkData.runner.meta);
+
+    const winnerTagsHTML = winnerTags.length > 0
+      ? winnerTags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
+      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
+    const runnerTagsHTML = runnerTags.length > 0
+      ? runnerTags.map(t => `<span class="rec-tag rec-tag-${t.color}">${t.label}</span>`).join('')
+      : '<span class="rec-tag rec-tag-gray">暂无推荐用途</span>';
+
+    const winnerDescHTML = winnerTags.length > 0
+      ? winnerTags.map(t => `<p class="pk-summary-desc">${t.description}</p>`).join('')
+      : '';
+    const runnerDescHTML = runnerTags.length > 0
+      ? runnerTags.map(t => `<p class="pk-summary-desc">${t.description}</p>`).join('')
+      : '';
+
+    const winnerStrengths = pkData.winnerStrengths.length > 0
+      ? `<div class="pk-summary-strengths"><span class="pk-strength-label">优势项：</span>${pkData.winnerStrengths.join('、')}</div>`
+      : '';
+    const runnerStrengths = pkData.runnerStrengths.length > 0
+      ? `<div class="pk-summary-strengths"><span class="pk-strength-label">优势项：</span>${pkData.runnerStrengths.join('、')}</div>`
+      : '';
 
     // Remove any existing overlay
     const existing = document.getElementById('fullReportOverlay');
@@ -1321,9 +1388,28 @@ class App {
             <div class="pk-radar-container">${radarSVG}</div>
           </div>
 
-          <div style="background:var(--bg);border:1px solid var(--border);border-radius:12px;padding:20px;font-size:14px;color:var(--text-dim);line-height:1.8;margin-bottom:20px;">
-            <strong style="color:var(--text);">对比分析摘要：</strong><br>
-            ${pkData.summary}
+          <div class="pk-summary-section" style="margin-bottom:20px;">
+            <h3 class="pk-summary-title">📋 对比分析摘要</h3>
+            <div class="pk-summary-divider"></div>
+            <div class="pk-summary-model">
+              <div class="pk-summary-model-header">
+                <span class="pk-summary-model-name" style="color:#3b82f6;">${pkData.winner.name}</span>
+                <span class="pk-summary-model-score">${pkData.winner.result.totalScore.toFixed(2)} / 100</span>
+              </div>
+              <div class="pk-summary-tags">${winnerTagsHTML}</div>
+              ${winnerDescHTML}
+              ${winnerStrengths}
+            </div>
+            <div class="pk-summary-divider"></div>
+            <div class="pk-summary-model">
+              <div class="pk-summary-model-header">
+                <span class="pk-summary-model-name" style="color:#ef4444;">${pkData.runner.name}</span>
+                <span class="pk-summary-model-score">${pkData.runner.result.totalScore.toFixed(2)} / 100</span>
+              </div>
+              <div class="pk-summary-tags">${runnerTagsHTML}</div>
+              ${runnerDescHTML}
+              ${runnerStrengths}
+            </div>
           </div>
 
           <!-- Detailed dimension comparison -->
