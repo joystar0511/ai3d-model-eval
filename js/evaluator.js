@@ -153,6 +153,8 @@ class ModelEvaluator {
   static _evalBrokenFaces(geo) {
     const max = RAW_MAX.brokenFaces;
     let broken = 0;
+
+    // Check for degenerate faces (zero-length edges, triangle inequality violations)
     if (geo.edgeLengths) {
       for (let i = 0; i < geo.edgeLengths.length; i += 3) {
         const a = geo.edgeLengths[i] || 0;
@@ -162,6 +164,13 @@ class ModelEvaluator {
         if (a + b < c * 0.999 || a + c < b * 0.999 || b + c < a * 0.999) broken++;
       }
     }
+
+    // Add holes: edge triangles without corresponding faces (Issue 1: 破面检测)
+    if (geo.holeCount) {
+      broken += geo.holeCount;
+    }
+
+    console.log(`[破面] 退化面+三角不等式违反=${broken - (geo.holeCount || 0)}, 空洞=${geo.holeCount || 0}, 总破面=${broken}`);
     const penalty = Math.min(broken, max);
     return Math.max(max - penalty, 0);
   }
@@ -375,10 +384,12 @@ class ModelEvaluator {
   /**
    * 贴图色彩 (Texture Color)
    *
-   * New logic:
+   * Logic:
    * - HSV (0-255) standard
    * - Check if any pixels have brightness (V) < 2 or > 253
-   * - Each 1% of total pixels with such brightness → -0.5
+   * - If such pixels make up > 20% of total pixels, the texture's base color
+   *   naturally includes near-pure-black/white — no deduction
+   * - Otherwise: each 1% of total pixels with such brightness → -0.5
    * - Score = max(0, 10 - penalty)
    */
   static _evalTextureColor(tex) {
@@ -405,10 +416,20 @@ class ModelEvaluator {
       }
     }
 
-    const badPercent = (badPixels / totalPixels) * 100;
+    const badRatio = badPixels / totalPixels;
+
+    // If near-pure-black/white pixels > 20%, the texture's base color
+    // naturally includes these extremes — no deduction
+    if (badRatio > 0.20) {
+      console.log(`[贴图色彩] 纯黑纯白占比=${(badRatio * 100).toFixed(1)}% > 20%, 贴图基色包含极值, 不扣分, 得分=${max}`);
+      return max;
+    }
+
+    const badPercent = badRatio * 100;
     // Each 1% → -0.5
     const penalty = badPercent * 0.5;
 
+    console.log(`[贴图色彩] 纯黑纯白占比=${badPercent.toFixed(1)}%, 扣分=${penalty.toFixed(2)}, 得分=${Math.max(max - penalty, 0).toFixed(2)}`);
     return Math.max(max - penalty, 0);
   }
 
